@@ -58,13 +58,32 @@ function timeSlots() {
   return slots;
 }
 
-function renderSlots(slots, hintText = '') {
+function renderSlots(baseSlots, startSlots, hintText = '') {
   dom.slots.innerHTML = '';
-  dom.slotsHint.classList.toggle('hidden', Boolean(slots.length));
-  if (!slots.length) {
+  dom.slotsHint.classList.toggle('hidden', Boolean(baseSlots.length));
+  if (!baseSlots.length) {
     dom.slotsHint.textContent = hintText || 'Pro vybraný den nejsou volné termíny.';
     return;
   }
+
+  const baseByWorker = new Map();
+  baseSlots.forEach((slot) => {
+    if (!baseByWorker.has(slot.worker_id)) {
+      baseByWorker.set(slot.worker_id, {
+        worker_name: slot.worker_name,
+        slots: new Set()
+      });
+    }
+    baseByWorker.get(slot.worker_id).slots.add(slot.time_slot);
+  });
+
+  const startByWorker = new Map();
+  startSlots.forEach((slot) => {
+    if (!startByWorker.has(slot.worker_id)) {
+      startByWorker.set(slot.worker_id, new Set());
+    }
+    startByWorker.get(slot.worker_id).add(slot.time_slot);
+  });
 
   const slotList = timeSlots();
   const requiredSlots = Math.max(1, Math.ceil(state.duration / 30));
@@ -75,19 +94,18 @@ function renderSlots(slots, hintText = '') {
     });
     const startIndex = slotList.indexOf(startTime);
     if (startIndex === -1) return false;
+    const workerSlots = baseByWorker.get(workerId)?.slots || new Set();
     let ok = true;
     for (let i = 0; i < requiredSlots; i += 1) {
       const slot = slotList[startIndex + i];
-      if (!slot) {
+      if (!slot || !workerSlots.has(slot)) {
         ok = false;
         break;
       }
       const cell = document.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
-      if (!cell) {
-        ok = false;
-        break;
+      if (cell) {
+        cell.classList.add('is-selected');
       }
-      cell.classList.add('is-selected');
     }
     document.querySelectorAll('.slot-button.is-selected').forEach((cell) => {
       cell.classList.add(ok ? 'is-valid' : 'is-invalid');
@@ -95,13 +113,16 @@ function renderSlots(slots, hintText = '') {
     return ok;
   };
 
-  slots.forEach((slot) => {
+  baseSlots.forEach((slot) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'ghost slot-button';
     button.textContent = `${slot.time_slot} • ${slot.worker_name}`;
     button.dataset.workerId = slot.worker_id;
     button.dataset.time = slot.time_slot;
+    if (startByWorker.get(slot.worker_id)?.has(slot.time_slot)) {
+      button.classList.add('is-start');
+    }
     button.addEventListener('click', () => {
       document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
       button.classList.add('active');
@@ -128,14 +149,14 @@ async function loadSlots() {
   dom.submit.disabled = true;
   state.selectedSlot = null;
   if (!serviceId || !date) {
-    renderSlots([], 'Zvol službu a datum.');
+    renderSlots([], [], 'Zvol službu a datum.');
     return;
   }
 
   const response = await fetch(`/api/public/availability?date=${encodeURIComponent(date)}&service_id=${serviceId}`);
   const data = await response.json();
   state.duration = Number(data.duration) || 30;
-  renderSlots(data.slots || []);
+  renderSlots(data.base_slots || [], data.slots || []);
   if (state.selectedSlot) {
     const selectedButton = document.querySelector(
       `.slot-button[data-worker-id="${state.selectedSlot.worker_id}"][data-time="${state.selectedSlot.time}"]`
