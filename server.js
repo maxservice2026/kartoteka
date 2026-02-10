@@ -8,6 +8,10 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
+const PRO_ALLOWED_IPS = (process.env.PRO_ALLOWED_IPS || '')
+  .split(',')
+  .map((ip) => ip.trim())
+  .filter(Boolean);
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
 
@@ -95,6 +99,28 @@ if (usePostgres) {
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+function normalizeIp(ip) {
+  if (!ip) return '';
+  if (ip.startsWith('::ffff:')) return ip.slice(7);
+  return ip;
+}
+
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    return normalizeIp(forwarded.split(',')[0].trim());
+  }
+  return normalizeIp(req.socket?.remoteAddress || '');
+}
+
+function isProAllowed(req) {
+  if (!PRO_ALLOWED_IPS.length) return true;
+  const ip = getClientIp(req);
+  if (!ip) return false;
+  if (ip === '127.0.0.1' || ip === '::1') return true;
+  return PRO_ALLOWED_IPS.includes(ip);
+}
 
 app.get('/rezervace', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'booking.html'));
@@ -263,6 +289,13 @@ function requireRole(role) {
 function requireEconomyAccess(req, res, next) {
   if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'worker')) {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+  return next();
+}
+
+function requireProAccess(req, res, next) {
+  if (!isProAllowed(req)) {
+    return res.status(403).json({ error: 'PRO přístup pouze pro povolené zařízení.' });
   }
   return next();
 }
@@ -552,6 +585,10 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, user: userView(user) });
 });
 
+app.get('/api/pro-access', (req, res) => {
+  res.json({ allowed: isProAllowed(req) });
+});
+
 app.get('/api/public/services', async (req, res) => {
   const services = await db.all(
     'SELECT id, name, duration_minutes FROM services WHERE active = 1 ORDER BY name'
@@ -780,7 +817,7 @@ app.get('/api/settings', async (req, res) => {
   res.json(await getSettings());
 });
 
-app.get('/api/availability', async (req, res) => {
+app.get('/api/availability', requireProAccess, async (req, res) => {
   if (req.user.role === 'reception') {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
   }
@@ -794,7 +831,7 @@ app.get('/api/availability', async (req, res) => {
   res.json({ days, times });
 });
 
-app.post('/api/availability', async (req, res) => {
+app.post('/api/availability', requireProAccess, async (req, res) => {
   if (req.user.role === 'reception') {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
   }
@@ -820,7 +857,7 @@ app.post('/api/availability', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/reservations/calendar', async (req, res) => {
+app.get('/api/reservations/calendar', requireProAccess, async (req, res) => {
   const year = toInt(req.query.year, new Date().getFullYear());
   const month = toInt(req.query.month, new Date().getMonth() + 1);
   if (month < 1 || month > 12) {
@@ -844,7 +881,7 @@ app.get('/api/reservations/calendar', async (req, res) => {
   res.json({ days });
 });
 
-app.get('/api/reservations', async (req, res) => {
+app.get('/api/reservations', requireProAccess, async (req, res) => {
   const year = toInt(req.query.year, new Date().getFullYear());
   const month = toInt(req.query.month, new Date().getMonth() + 1);
   const lastDay = new Date(year, month, 0).getDate();
@@ -1270,7 +1307,7 @@ function economyRange(req) {
   return { from: from || fromAuto, to: to || toAuto };
 }
 
-app.get('/api/economy', requireEconomyAccess, async (req, res) => {
+app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res) => {
   const range = economyRange(req);
   const role = req.user.role;
   const serviceFilter = req.query.service_id || null;

@@ -165,6 +165,16 @@ button.pro-button {
   gap: 6px;
 }
 
+button.pro-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pro-locked .pro-pill {
+  background: rgba(27, 79, 216, 0.08);
+  color: #6c82c4;
+}
+
 .pro-pill {
   display: inline-flex;
   align-items: center;

@@ -75,6 +75,7 @@ const state = {
   visits: [],
   users: [],
   selectedServiceId: null,
+  proAllowed: false,
   auth: {
     token: null,
     user: null,
@@ -231,6 +232,17 @@ function updateUserUi() {
   dom.btnEconomy.classList.toggle('hidden', !canEconomy);
   dom.summaryStats.classList.toggle('hidden', !isAdmin);
   dom.btnLogout.classList.toggle('hidden', !state.auth.user);
+  applyProAccess();
+}
+
+function applyProAccess() {
+  const allow = !!state.proAllowed;
+  const proButtons = [dom.btnEconomy, dom.btnCalendar, dom.btnBilling, dom.btnNotifications];
+  proButtons.forEach((button) => {
+    if (!button) return;
+    button.disabled = !allow;
+    button.classList.toggle('pro-locked', !allow);
+  });
 }
 
 function hideAuthScreen() {
@@ -315,11 +327,22 @@ function showSetupScreen() {
 
 async function onAuthenticated() {
   updateUserUi();
+  await loadProAccess();
   await loadSettings();
   await loadClients();
   await loadSummary();
   clearSelection();
   updatePricePreview();
+}
+
+async function loadProAccess() {
+  try {
+    const data = await api.get('/api/pro-access');
+    state.proAllowed = !!data.allowed;
+  } catch (err) {
+    state.proAllowed = false;
+  }
+  applyProAccess();
 }
 
 async function bootstrapAuth() {
