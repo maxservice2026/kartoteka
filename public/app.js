@@ -410,18 +410,7 @@ async function loadSummary() {
   } else {
     dom.summaryCounts.textContent = `Klientek: ${data.counts.clients} • Záznamů: ${data.counts.visits} • Výdajů: ${data.counts.expenses}`;
   }
-  if (!data.totals) {
-    dom.summaryStats.innerHTML = '';
-    return;
-  }
-  dom.summaryStats.innerHTML = `
-    <div>Tržba (tento měsíc): <strong>${formatCzk(data.totals.income_month)}</strong></div>
-    <div>Výdaje (tento měsíc): <strong>${formatCzk(data.totals.expenses_month)}</strong></div>
-    <div>Zisk (tento měsíc): <strong>${formatCzk(data.totals.profit_month)}</strong></div>
-    <div>Tržba (celkem): <strong>${formatCzk(data.totals.income_all)}</strong></div>
-    <div>Výdaje (celkem): <strong>${formatCzk(data.totals.expenses_all)}</strong></div>
-    <div>Zisk (celkem): <strong>${formatCzk(data.totals.profit_all)}</strong></div>
-  `;
+  dom.summaryStats.innerHTML = '';
 }
 
 function renderSettingsInputs() {
