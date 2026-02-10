@@ -1,0 +1,1411 @@
+const dom = {
+  searchInput: document.getElementById('searchInput'),
+  clientsList: document.getElementById('clientsList'),
+  summaryCounts: document.getElementById('summaryCounts'),
+  summaryStats: document.getElementById('summaryStats'),
+  newClientView: document.getElementById('newClientView'),
+  clientView: document.getElementById('clientView'),
+  newFirstName: document.getElementById('newFirstName'),
+  newLastName: document.getElementById('newLastName'),
+  newPhone: document.getElementById('newPhone'),
+  newEmail: document.getElementById('newEmail'),
+  btnCreateClient: document.getElementById('btnCreateClient'),
+  btnCreateClientAndService: document.getElementById('btnCreateClientAndService'),
+  clientTitle: document.getElementById('clientTitle'),
+  btnToggleClient: document.getElementById('btnToggleClient'),
+  clientDetails: document.getElementById('clientDetails'),
+  fullName: document.getElementById('fullName'),
+  phone: document.getElementById('phone'),
+  email: document.getElementById('email'),
+  skinType: document.getElementById('skinType'),
+  skinNotes: document.getElementById('skinNotes'),
+  cream: document.getElementById('cream'),
+  servicePicker: document.getElementById('servicePicker'),
+  serviceFormCosmetic: document.getElementById('serviceFormCosmetic'),
+  serviceFormGeneric: document.getElementById('serviceFormGeneric'),
+  treatmentType: document.getElementById('treatmentType'),
+  addonsList: document.getElementById('addonsList'),
+  basePrice: document.getElementById('basePrice'),
+  addonsTotal: document.getElementById('addonsTotal'),
+  manualTotal: document.getElementById('manualTotal'),
+  finalTotal: document.getElementById('finalTotal'),
+  worker: document.getElementById('worker'),
+  paymentMethod: document.getElementById('paymentMethod'),
+  visitNote: document.getElementById('visitNote'),
+  visitDate: document.getElementById('visitDate'),
+  genText1: document.getElementById('genText1'),
+  genText2: document.getElementById('genText2'),
+  genText3: document.getElementById('genText3'),
+  genSelect1: document.getElementById('genSelect1'),
+  genSelect2: document.getElementById('genSelect2'),
+  genSelect3: document.getElementById('genSelect3'),
+  genPrice: document.getElementById('genPrice'),
+  genDate: document.getElementById('genDate'),
+  genWorker: document.getElementById('genWorker'),
+  genPaymentMethod: document.getElementById('genPaymentMethod'),
+  genNote: document.getElementById('genNote'),
+  visitsList: document.getElementById('visitsList'),
+  btnNew: document.getElementById('btnNew'),
+  btnSave: document.getElementById('btnSave'),
+  btnAddVisit: document.getElementById('btnAddVisit'),
+  btnAddGeneric: document.getElementById('btnAddGeneric'),
+  btnSettings: document.getElementById('btnSettings'),
+  btnEconomy: document.getElementById('btnEconomy'),
+  btnBackup: document.getElementById('btnBackup'),
+  btnRestore: document.getElementById('btnRestore'),
+  btnLogout: document.getElementById('btnLogout'),
+  serverStatus: document.getElementById('serverStatus'),
+  serverDot: document.getElementById('serverDot'),
+  serverText: document.getElementById('serverText'),
+  userInfo: document.getElementById('userInfo'),
+  authRoot: document.getElementById('authRoot'),
+  modalRoot: document.getElementById('modalRoot')
+};
+
+const state = {
+  clients: [],
+  selectedClientId: null,
+  settings: {
+    skinTypes: [],
+    services: [],
+    treatments: [],
+    addons: [],
+    workers: []
+  },
+  visits: [],
+  users: [],
+  selectedServiceId: null,
+  auth: {
+    token: null,
+    user: null,
+    hasUsers: null
+  }
+};
+
+let handleUnauthorized = () => {};
+
+const api = {
+  async request(url, options = {}) {
+    const headers = {
+      ...(options.headers || {})
+    };
+    const token = state.auth.token || localStorage.getItem('kartoteka_token');
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+
+    let response;
+    try {
+      response = await fetch(url, { ...options, headers });
+    } catch (err) {
+      alert('Server je nedostupný.');
+      throw err;
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        handleUnauthorized();
+      }
+      const error = await response.json().catch(() => null);
+      const message = error?.error || `Chyba komunikace se serverem (HTTP ${response.status}).`;
+      const detail = error?.detail ? `\n${error.detail}` : '';
+      alert(message + detail);
+      throw new Error(message);
+    }
+    return response.json();
+  },
+  get(url) {
+    return api.request(url);
+  },
+  post(url, data) {
+    return api.request(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+  },
+  put(url, data) {
+    return api.request(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+  },
+  del(url) {
+    return api.request(url, { method: 'DELETE' });
+  }
+};
+
+function todayLocal() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+function toLocalDateString(date) {
+  const d = new Date(date);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+function formatCzk(value) {
+  const numeric = Number(value);
+  const safe = Number.isFinite(numeric) ? numeric : 0;
+  return `${safe.toLocaleString('cs-CZ')} Kč`;
+}
+
+function debounce(fn, delay = 200) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+function setServerStatus(online) {
+  if (!dom.serverDot || !dom.serverText) return;
+  dom.serverDot.classList.toggle('online', online);
+  dom.serverDot.classList.toggle('offline', !online);
+  dom.serverText.textContent = online ? 'Server: běží' : 'Server: nedostupný';
+}
+
+async function checkServer() {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const response = await fetch('/api/health', { signal: controller.signal });
+    clearTimeout(timeout);
+    setServerStatus(response.ok);
+  } catch (err) {
+    setServerStatus(false);
+  }
+}
+
+function startServerMonitor() {
+  checkServer();
+  setInterval(checkServer, 5000);
+}
+
+function showNewClientView() {
+  dom.newClientView.classList.remove('hidden');
+  dom.clientView.classList.add('hidden');
+}
+
+function showClientView() {
+  dom.newClientView.classList.add('hidden');
+  dom.clientView.classList.remove('hidden');
+}
+
+function setClientDetailsOpen(open) {
+  if (!dom.clientDetails || !dom.btnToggleClient) return;
+  dom.clientDetails.classList.toggle('hidden', !open);
+  dom.btnToggleClient.textContent = open ? 'Skrýt údaje klientky' : 'Upravit údaje klientky';
+}
+
+function setAuthToken(token) {
+  state.auth.token = token;
+  if (token) {
+    localStorage.setItem('kartoteka_token', token);
+  } else {
+    localStorage.removeItem('kartoteka_token');
+  }
+}
+
+function updateUserUi() {
+  if (state.auth.user) {
+    const roleLabel =
+      state.auth.user.role === 'admin'
+        ? 'Administrátor'
+        : state.auth.user.role === 'reception'
+          ? 'Recepční'
+          : 'Pracovník';
+    dom.userInfo.textContent = `${state.auth.user.full_name} • ${roleLabel}`;
+  } else {
+    dom.userInfo.textContent = '';
+  }
+
+  const isAdmin = state.auth.user?.role === 'admin';
+  dom.btnSettings.classList.toggle('hidden', !isAdmin);
+  const isLogged = !!state.auth.user;
+  dom.btnEconomy.classList.toggle('hidden', !isAdmin);
+  dom.btnBackup.classList.toggle('hidden', !isAdmin);
+  dom.btnRestore.classList.toggle('hidden', !isAdmin);
+  dom.summaryStats.classList.toggle('hidden', !isAdmin);
+  dom.btnLogout.classList.toggle('hidden', !state.auth.user);
+}
+
+function hideAuthScreen() {
+  dom.authRoot.innerHTML = '';
+}
+
+function showAuthScreen(html) {
+  dom.authRoot.innerHTML = `
+    <div class="auth-screen">
+      <div class="auth-card">${html}</div>
+    </div>
+  `;
+}
+
+function showLoginScreen() {
+  showAuthScreen(`
+    <h2>Přihlášení</h2>
+    <div class="field">
+      <label>Uživatelské jméno</label>
+      <input type="text" id="loginUsername" />
+    </div>
+    <div class="field">
+      <label>Heslo</label>
+      <input type="password" id="loginPassword" />
+    </div>
+    <div class="actions-row">
+      <button class="primary" id="loginSubmit">Přihlásit</button>
+    </div>
+  `);
+
+  document.getElementById('loginSubmit').addEventListener('click', async () => {
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value.trim();
+    if (!username || !password) {
+      alert('Vyplň uživatelské jméno a heslo.');
+      return;
+    }
+    const result = await api.post('/api/login', { username, password });
+    setAuthToken(result.token);
+    state.auth.user = result.user;
+    hideAuthScreen();
+    await onAuthenticated();
+  });
+}
+
+function showSetupScreen() {
+  showAuthScreen(`
+    <h2>Vytvoření administrátora</h2>
+    <div class="field">
+      <label>Jméno a příjmení</label>
+      <input type="text" id="setupName" />
+    </div>
+    <div class="field">
+      <label>Uživatelské jméno</label>
+      <input type="text" id="setupUsername" />
+    </div>
+    <div class="field">
+      <label>Heslo</label>
+      <input type="password" id="setupPassword" />
+    </div>
+    <div class="actions-row">
+      <button class="primary" id="setupSubmit">Vytvořit a přihlásit</button>
+    </div>
+  `);
+
+  document.getElementById('setupSubmit').addEventListener('click', async () => {
+    const fullName = document.getElementById('setupName').value.trim();
+    const username = document.getElementById('setupUsername').value.trim();
+    const password = document.getElementById('setupPassword').value.trim();
+    if (!fullName || !username || !password) {
+      alert('Vyplň všechna pole.');
+      return;
+    }
+    await api.post('/api/setup', { full_name: fullName, username, password });
+    const login = await api.post('/api/login', { username, password });
+    setAuthToken(login.token);
+    state.auth.user = login.user;
+    hideAuthScreen();
+    await onAuthenticated();
+  });
+}
+
+async function onAuthenticated() {
+  updateUserUi();
+  await loadSettings();
+  await loadClients();
+  await loadSummary();
+  clearSelection();
+  updatePricePreview();
+}
+
+async function bootstrapAuth() {
+  const bootstrap = await api.get('/api/bootstrap');
+  state.auth.hasUsers = bootstrap.has_users;
+
+  const storedToken = localStorage.getItem('kartoteka_token');
+  if (bootstrap.has_users && storedToken) {
+    try {
+      const me = await api.get('/api/me');
+      state.auth.user = me.user;
+      setAuthToken(storedToken);
+      hideAuthScreen();
+      await onAuthenticated();
+      return;
+    } catch (err) {
+      setAuthToken(null);
+    }
+  }
+
+  state.auth.user = null;
+  updateUserUi();
+
+  if (!bootstrap.has_users) {
+    showSetupScreen();
+  } else {
+    showLoginScreen();
+  }
+}
+
+handleUnauthorized = () => {
+  setAuthToken(null);
+  state.auth.user = null;
+  updateUserUi();
+  if (state.auth.hasUsers === false) {
+    showSetupScreen();
+  } else {
+    showLoginScreen();
+  }
+};
+
+async function loadSettings() {
+  const data = await api.get('/api/settings');
+  state.settings = {
+    skinTypes: data.skinTypes || [],
+    services: data.services || [],
+    treatments: data.treatments || [],
+    addons: data.addons || [],
+    workers: data.workers || []
+  };
+  renderSettingsInputs();
+  if (state.selectedClientId) {
+    renderServiceButtons(false);
+  }
+}
+
+async function loadUsers() {
+  if (state.auth.user?.role !== 'admin') {
+    state.users = [];
+    return;
+  }
+  state.users = await api.get('/api/users');
+}
+
+async function loadClients() {
+  const search = dom.searchInput.value.trim();
+  const query = search ? `?search=${encodeURIComponent(search)}` : '';
+  state.clients = await api.get(`/api/clients${query}`);
+  renderClients();
+}
+
+async function loadVisits(clientId) {
+  state.visits = clientId ? await api.get(`/api/clients/${clientId}/visits`) : [];
+  renderVisits();
+}
+
+async function loadSummary() {
+  const data = await api.get('/api/summary');
+  if (state.auth.user?.role === 'reception') {
+    dom.summaryCounts.textContent = `Klientek: ${data.counts.clients} • Záznamů: ${data.counts.visits}`;
+  } else {
+    dom.summaryCounts.textContent = `Klientek: ${data.counts.clients} • Záznamů: ${data.counts.visits} • Výdajů: ${data.counts.expenses}`;
+  }
+  if (!data.totals) {
+    dom.summaryStats.innerHTML = '';
+    return;
+  }
+  dom.summaryStats.innerHTML = `
+    <div>Tržba (tento měsíc): <strong>${formatCzk(data.totals.income_month)}</strong></div>
+    <div>Výdaje (tento měsíc): <strong>${formatCzk(data.totals.expenses_month)}</strong></div>
+    <div>Zisk (tento měsíc): <strong>${formatCzk(data.totals.profit_month)}</strong></div>
+    <div>Tržba (celkem): <strong>${formatCzk(data.totals.income_all)}</strong></div>
+    <div>Výdaje (celkem): <strong>${formatCzk(data.totals.expenses_all)}</strong></div>
+    <div>Zisk (celkem): <strong>${formatCzk(data.totals.profit_all)}</strong></div>
+  `;
+}
+
+function renderSettingsInputs() {
+  dom.skinType.innerHTML = '<option value="">—</option>' + state.settings.skinTypes
+    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+    .join('');
+
+  dom.treatmentType.innerHTML = '<option value="">—</option>' + state.settings.treatments
+    .map((item) => `<option value="${item.id}" data-price="${item.price}">${item.name}</option>`)
+    .join('');
+
+  dom.addonsList.innerHTML = state.settings.addons
+    .map((item) => {
+      return `
+        <label class="addon-item">
+          <span>
+            <input type="checkbox" value="${item.id}" data-price="${item.price}" />
+            ${item.name}
+          </span>
+          <span>${formatCzk(item.price)}</span>
+        </label>
+      `;
+    })
+    .join('');
+
+  const workerOptions = '<option value="">—</option>' + state.settings.workers
+    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+    .join('');
+  dom.worker.innerHTML = workerOptions;
+  dom.genWorker.innerHTML = workerOptions;
+
+  dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.addEventListener('change', updatePricePreview);
+  });
+}
+
+function renderServiceButtons(autoSelect = false) {
+  if (!dom.servicePicker) return;
+  if (!state.settings.services.length) {
+    dom.servicePicker.innerHTML = '<div class="hint">V nastavení zatím nejsou žádné služby.</div>';
+    dom.serviceFormCosmetic.classList.add('hidden');
+    dom.serviceFormGeneric.classList.add('hidden');
+    return;
+  }
+
+  if (state.selectedServiceId && !state.settings.services.find((item) => item.id === state.selectedServiceId)) {
+    state.selectedServiceId = null;
+  }
+
+  dom.servicePicker.innerHTML = state.settings.services
+    .map((service) => {
+      const active = service.id === state.selectedServiceId ? 'active' : '';
+      return `<button type="button" class="service-button ${active}" data-id="${service.id}">${service.name}</button>`;
+    })
+    .join('');
+
+  dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
+    button.addEventListener('click', () => selectService(button.dataset.id));
+  });
+
+  if (autoSelect && !state.selectedServiceId) {
+    selectService(state.settings.services[0].id);
+  } else if (state.selectedServiceId) {
+    selectService(state.selectedServiceId);
+  } else {
+    dom.serviceFormCosmetic.classList.add('hidden');
+    dom.serviceFormGeneric.classList.add('hidden');
+  }
+}
+
+function selectService(id) {
+  const previous = state.selectedServiceId;
+  state.selectedServiceId = id;
+  const service = state.settings.services.find((item) => item.id === id);
+  if (!service) return;
+  if (previous !== id) {
+    resetVisitFields();
+  }
+
+  dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.id === id);
+  });
+
+  if (service.form_type === 'cosmetic') {
+    dom.serviceFormCosmetic.classList.remove('hidden');
+    dom.serviceFormGeneric.classList.add('hidden');
+  } else {
+    dom.serviceFormCosmetic.classList.add('hidden');
+    dom.serviceFormGeneric.classList.remove('hidden');
+  }
+}
+
+function renderClients() {
+  if (!state.clients.length) {
+    dom.clientsList.innerHTML = '<div class="hint">Zatím tu nic není. Vpravo přidej první klientku.</div>';
+    return;
+  }
+
+  dom.clientsList.innerHTML = state.clients
+    .map((client) => {
+      const active = client.id === state.selectedClientId ? 'active' : '';
+      const phone = client.phone ? client.phone : '';
+      const email = client.email ? client.email : '';
+      const meta = [phone, email].filter(Boolean).join(' • ');
+      return `
+        <div class="client-card ${active}" data-id="${client.id}">
+          <div class="name">${client.full_name}</div>
+          <div class="small">${meta || 'Bez kontaktu'}</div>
+        </div>
+      `;
+    })
+    .join('');
+
+  dom.clientsList.querySelectorAll('.client-card').forEach((card) => {
+    card.addEventListener('click', () => selectClient(card.dataset.id));
+  });
+}
+
+function renderVisits() {
+  if (!state.selectedClientId) {
+    dom.visitsList.innerHTML = '<div class="hint">Vyber klientku, abys viděla historii.</div>';
+    return;
+  }
+  if (!state.visits.length) {
+    dom.visitsList.innerHTML = '<div class="hint">Zatím žádná historie návštěv.</div>';
+    return;
+  }
+
+  dom.visitsList.innerHTML = state.visits
+    .map((visit) => {
+      const date = visit.date || '';
+      const serviceName = visit.service_name || 'Služba';
+      const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
+      const title = `${serviceName}${treatment}`.trim();
+      const worker = visit.worker_name ? ` • ${visit.worker_name}` : '';
+      const payment = visit.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
+      const note = visit.note ? `Poznámka: ${visit.note}` : '';
+      const noteLine = note ? `<div class="history-meta">${note}</div>` : '';
+      return `
+        <div class="history-card">
+          <div class="history-title">
+            <span>${title}</span>
+            <span>${formatCzk(visit.total)}</span>
+          </div>
+          <div class="history-meta">${date} • ${payment}${worker}</div>
+          ${noteLine}
+        </div>
+      `;
+    })
+    .join('');
+}
+
+function setFormValues(client) {
+  dom.fullName.value = client?.full_name || '';
+  dom.phone.value = client?.phone || '';
+  dom.email.value = client?.email || '';
+  dom.skinType.value = client?.skin_type_id || '';
+  dom.skinNotes.value = client?.skin_notes || '';
+  dom.cream.value = client?.cream || '';
+}
+
+function resetVisitFields() {
+  dom.treatmentType.value = '';
+  dom.manualTotal.value = '';
+  dom.paymentMethod.value = 'cash';
+  dom.visitNote.value = '';
+  dom.visitDate.value = todayLocal();
+  dom.worker.value = '';
+  dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+    input.checked = false;
+  });
+  dom.genText1.value = '';
+  dom.genText2.value = '';
+  dom.genText3.value = '';
+  dom.genSelect1.value = '';
+  dom.genSelect2.value = '';
+  dom.genSelect3.value = '';
+  dom.genPrice.value = '';
+  dom.genDate.value = todayLocal();
+  dom.genWorker.value = '';
+  dom.genPaymentMethod.value = 'cash';
+  dom.genNote.value = '';
+  updatePricePreview();
+}
+
+function clearSelection() {
+  state.selectedClientId = null;
+  state.selectedServiceId = null;
+  setFormValues(null);
+  resetVisitFields();
+  renderClients();
+  renderVisits();
+  dom.clientTitle.textContent = 'Karta klientky';
+  dom.servicePicker.innerHTML = '';
+  setClientDetailsOpen(false);
+  showNewClientView();
+  dom.newFirstName.value = '';
+  dom.newLastName.value = '';
+  dom.newPhone.value = '';
+  dom.newEmail.value = '';
+}
+
+function resetAppData() {
+  state.clients = [];
+  state.visits = [];
+  dom.clientsList.innerHTML = '';
+  dom.visitsList.innerHTML = '';
+  dom.summaryCounts.textContent = '';
+  dom.summaryStats.innerHTML = '';
+  clearSelection();
+}
+
+async function handleLogout() {
+  try {
+    await api.post('/api/logout', {});
+  } catch (err) {
+    // ignore
+  }
+  setAuthToken(null);
+  state.auth.user = null;
+  updateUserUi();
+  resetAppData();
+  showLoginScreen();
+}
+
+async function selectClient(id, autoSelectService = false) {
+  state.selectedClientId = id;
+  state.selectedServiceId = null;
+  const client = await api.get(`/api/clients/${id}`);
+  setFormValues(client);
+  dom.clientTitle.textContent = client.full_name || 'Karta klientky';
+  showClientView();
+  setClientDetailsOpen(false);
+  resetVisitFields();
+  await loadVisits(id);
+  renderClients();
+  renderServiceButtons(autoSelectService);
+}
+
+function collectNewClientPayload() {
+  const firstName = dom.newFirstName.value.trim();
+  const lastName = dom.newLastName.value.trim();
+  const fullName = [firstName, lastName].filter(Boolean).join(' ');
+  return {
+    full_name: fullName,
+    phone: dom.newPhone.value.trim(),
+    email: dom.newEmail.value.trim()
+  };
+}
+
+function collectClientPayload() {
+  return {
+    full_name: dom.fullName.value.trim(),
+    phone: dom.phone.value.trim(),
+    email: dom.email.value.trim(),
+    skin_type_id: dom.skinType.value || null,
+    skin_notes: dom.skinNotes.value.trim(),
+    cream: dom.cream.value.trim()
+  };
+}
+
+async function saveClient() {
+  const payload = collectClientPayload();
+  if (!payload.full_name) {
+    alert('Vyplň jméno a příjmení.');
+    return null;
+  }
+
+  if (!state.selectedClientId) {
+    alert('Vyber klientku nebo použij formulář Nová klientka.');
+    return null;
+  }
+
+  await api.put(`/api/clients/${state.selectedClientId}`, payload);
+  await loadClients();
+  dom.clientTitle.textContent = payload.full_name;
+  return state.selectedClientId;
+}
+
+async function createClient(selectService = false) {
+  const payload = collectNewClientPayload();
+  if (!payload.full_name) {
+    alert('Vyplň jméno a příjmení.');
+    return;
+  }
+
+  const result = await api.post('/api/clients', payload);
+  await loadClients();
+
+  if (selectService) {
+    await selectClient(result.id, true);
+    dom.newFirstName.value = '';
+    dom.newLastName.value = '';
+    dom.newPhone.value = '';
+    dom.newEmail.value = '';
+  } else {
+    dom.newFirstName.value = '';
+    dom.newLastName.value = '';
+    dom.newPhone.value = '';
+    dom.newEmail.value = '';
+  }
+}
+
+function updatePricePreview() {
+  const treatment = state.settings.treatments.find((item) => item.id === dom.treatmentType.value);
+  const basePrice = treatment ? Number(treatment.price) : 0;
+  const addonsTotal = Array.from(dom.addonsList.querySelectorAll('input[type="checkbox"]'))
+    .filter((input) => input.checked)
+    .reduce((sum, input) => sum + Number(input.dataset.price || 0), 0);
+
+  const manual = dom.manualTotal.value !== '' ? Number(dom.manualTotal.value) : null;
+  const finalPrice = manual !== null && !Number.isNaN(manual) ? manual : basePrice + addonsTotal;
+
+  dom.basePrice.value = formatCzk(basePrice);
+  dom.addonsTotal.value = formatCzk(addonsTotal);
+  dom.finalTotal.value = formatCzk(finalPrice);
+}
+
+async function addVisit() {
+  if (!state.selectedServiceId) {
+    alert('Vyber službu.');
+    return;
+  }
+
+  const service = state.settings.services.find((item) => item.id === state.selectedServiceId);
+  if (!service || service.form_type !== 'cosmetic') {
+    alert('Vybraná služba nemá kosmetický formulář.');
+    return;
+  }
+
+  const clientId = await saveClient();
+  if (!clientId) return;
+
+  const treatmentId = dom.treatmentType.value || null;
+  if (!treatmentId) {
+    const proceed = confirm('Nebyl vybraný typ ošetření. Chceš přesto uložit návštěvu?');
+    if (!proceed) return;
+  }
+
+  if (!dom.worker.value) {
+    alert('Vyber pracovníka pro ekonomiku.');
+    return;
+  }
+
+  const addons = Array.from(dom.addonsList.querySelectorAll('input[type="checkbox"]'))
+    .filter((input) => input.checked)
+    .map((input) => input.value);
+
+  await api.post(`/api/clients/${clientId}/visits`, {
+    date: dom.visitDate.value || todayLocal(),
+    service_id: state.selectedServiceId,
+    treatment_id: treatmentId,
+    addons,
+    manual_total: dom.manualTotal.value,
+    note: dom.visitNote.value.trim(),
+    worker_id: dom.worker.value,
+    payment_method: dom.paymentMethod.value
+  });
+
+  resetVisitFields();
+  await loadVisits(clientId);
+  await loadSummary();
+}
+
+async function addGenericVisit() {
+  if (!state.selectedServiceId) {
+    alert('Vyber službu.');
+    return;
+  }
+
+  const service = state.settings.services.find((item) => item.id === state.selectedServiceId);
+  if (!service || service.form_type === 'cosmetic') {
+    alert('Vybraná služba nemá obecný formulář.');
+    return;
+  }
+
+  const clientId = await saveClient();
+  if (!clientId) return;
+
+  if (!dom.genWorker.value) {
+    alert('Vyber pracovníka pro ekonomiku.');
+    return;
+  }
+
+  if (!dom.genPrice.value) {
+    alert('Vyplň cenu služby.');
+    return;
+  }
+
+  const serviceData = {
+    text1: dom.genText1.value.trim(),
+    text2: dom.genText2.value.trim(),
+    text3: dom.genText3.value.trim(),
+    select1: dom.genSelect1.value,
+    select2: dom.genSelect2.value,
+    select3: dom.genSelect3.value
+  };
+
+  await api.post(`/api/clients/${clientId}/visits`, {
+    date: dom.genDate.value || todayLocal(),
+    service_id: state.selectedServiceId,
+    manual_total: dom.genPrice.value,
+    note: dom.genNote.value.trim(),
+    worker_id: dom.genWorker.value,
+    payment_method: dom.genPaymentMethod.value,
+    service_data: serviceData
+  });
+
+  resetVisitFields();
+  await loadVisits(clientId);
+  await loadSummary();
+}
+
+function openModal(contentHtml) {
+  dom.modalRoot.innerHTML = `
+    <div class="modal-backdrop" role="dialog" aria-modal="true">
+      <div class="modal">${contentHtml}</div>
+    </div>
+  `;
+  const backdrop = dom.modalRoot.querySelector('.modal-backdrop');
+  backdrop.addEventListener('click', (event) => {
+    if (event.target === backdrop) {
+      closeModal();
+    }
+  });
+}
+
+function closeModal() {
+  dom.modalRoot.innerHTML = '';
+}
+
+function monthRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return {
+    from: toLocalDateString(start),
+    to: toLocalDateString(end)
+  };
+}
+
+async function openEconomyModal() {
+  const range = monthRange();
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Ekonomika</h2>
+        <div class="meta">Příjmy z ošetření + ručně zadané výdaje</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      <div class="field-row">
+        <div class="field">
+          <label>Od</label>
+          <input type="date" id="ecoFrom" value="${range.from}" />
+        </div>
+        <div class="field">
+          <label>Do</label>
+          <input type="date" id="ecoTo" value="${range.to}" />
+        </div>
+      </div>
+      <div class="actions-row">
+        <button class="ghost" id="ecoFilter">Filtrovat</button>
+      </div>
+      <div id="ecoSummary"></div>
+      <div class="settings-section">
+        <h3>Přidat výdaj</h3>
+        <div class="field-row">
+          <div class="field">
+            <label>Popis</label>
+            <input type="text" id="expenseTitle" placeholder="Např. materiál" />
+          </div>
+          <div class="field">
+            <label>Částka</label>
+            <input type="number" id="expenseAmount" min="0" step="1" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Datum</label>
+            <input type="date" id="expenseDate" value="${todayLocal()}" />
+          </div>
+          <div class="field">
+            <label>Poznámka</label>
+            <input type="text" id="expenseNote" />
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="primary" id="expenseSave">Uložit výdaj</button>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>Příjmy (ošetření)</h3>
+        <div id="ecoVisits"></div>
+      </div>
+      <div class="settings-section">
+        <h3>Podle uživatele</h3>
+        <div id="ecoByWorker"></div>
+      </div>
+      <div class="settings-section">
+        <h3>Výdaje</h3>
+        <div id="ecoExpenses"></div>
+      </div>
+    </div>
+  `);
+
+  const closeBtn = document.getElementById('closeModal');
+  closeBtn.addEventListener('click', closeModal);
+
+  async function loadEconomy() {
+    const from = document.getElementById('ecoFrom').value;
+    const to = document.getElementById('ecoTo').value;
+    const data = await api.get(`/api/economy?from=${from}&to=${to}`);
+    const summary = document.getElementById('ecoSummary');
+    summary.innerHTML = `
+      <div class="stats">
+        <div>Tržba: <strong>${formatCzk(data.totals.income)}</strong></div>
+        <div>Výdaje: <strong>${formatCzk(data.totals.expenses)}</strong></div>
+        <div>Zisk: <strong>${formatCzk(data.totals.profit)}</strong></div>
+      </div>
+    `;
+
+    const visits = document.getElementById('ecoVisits');
+    if (!data.visits.length) {
+      visits.innerHTML = '<div class="hint">V tomto období nejsou žádná ošetření.</div>';
+    } else {
+      visits.innerHTML = data.visits
+        .map((visit) => `
+          <div class="settings-item">
+            <span>${visit.date} • ${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
+            <span>${formatCzk(visit.total)}</span>
+          </div>
+        `)
+        .join('');
+    }
+
+    const expenses = document.getElementById('ecoExpenses');
+    if (!data.expenses.length) {
+      expenses.innerHTML = '<div class="hint">V tomto období nejsou žádné výdaje.</div>';
+    } else {
+      expenses.innerHTML = data.expenses
+        .map((expense) => `
+          <div class="settings-item">
+            <span>${expense.date} • ${expense.title}</span>
+            <span>${formatCzk(expense.amount)}</span>
+          </div>
+        `)
+        .join('');
+    }
+
+    const byWorker = document.getElementById('ecoByWorker');
+    if (!data.by_worker || !data.by_worker.length) {
+      byWorker.innerHTML = '<div class="hint">Zatím žádná data podle pracovníka.</div>';
+    } else {
+      byWorker.innerHTML = data.by_worker
+        .map((row) => `
+          <div class="settings-item">
+            <span>${row.worker_name || 'Neurčeno'}</span>
+            <span>${formatCzk(row.total)}</span>
+          </div>
+        `)
+        .join('');
+    }
+  }
+
+  document.getElementById('ecoFilter').addEventListener('click', loadEconomy);
+  document.getElementById('expenseSave').addEventListener('click', async () => {
+    const title = document.getElementById('expenseTitle').value.trim();
+    const amount = document.getElementById('expenseAmount').value;
+    if (!title || !amount) {
+      alert('Vyplň popis a částku výdaje.');
+      return;
+    }
+    await api.post('/api/expenses', {
+      title,
+      amount,
+      date: document.getElementById('expenseDate').value,
+      note: document.getElementById('expenseNote').value.trim()
+    });
+    document.getElementById('expenseTitle').value = '';
+    document.getElementById('expenseAmount').value = '';
+    document.getElementById('expenseNote').value = '';
+    await loadEconomy();
+    await loadSummary();
+  });
+
+  await loadEconomy();
+}
+
+function settingsSectionTemplate({
+  title,
+  subtitle,
+  formId,
+  fields,
+  listId
+}) {
+  return `
+    <div class="settings-section" data-form="${formId}">
+      <div class="panel-header">
+        <div>
+          <h3>${title}</h3>
+          <div class="meta">${subtitle}</div>
+        </div>
+      </div>
+      <div class="field-row">
+        ${fields.join('')}
+      </div>
+      <div class="actions-row">
+        <button class="ghost" data-action="reset">Nový</button>
+        <button class="primary" data-action="save">Uložit</button>
+      </div>
+      <div class="settings-list" id="${listId}"></div>
+    </div>
+  `;
+}
+
+async function openSettingsModal() {
+  if (state.auth.user?.role === 'admin') {
+    await loadUsers();
+  }
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Nastavení</h2>
+        <div class="meta">Správa služeb, typů pleti, ošetření, příplatků a uživatelů.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid" id="settingsGrid"></div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+
+  const grid = document.getElementById('settingsGrid');
+  const sections = [
+    settingsSectionTemplate({
+      title: 'Služby',
+      subtitle: 'Hlavní služby pro výběr v kartě klientky.',
+      formId: 'services',
+      listId: 'serviceList',
+      fields: [
+        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
+        '<div class="field"><label>Formulář</label><select data-field="form_type"><option value="cosmetic">Kosmetika (detailní)</option><option value="generic">Obecný</option></select></div>'
+      ]
+    }),
+    settingsSectionTemplate({
+      title: 'Typy pleti',
+      subtitle: 'Používá se v kartě klientky.',
+      formId: 'skin',
+      listId: 'skinList',
+      fields: [
+        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Citlivá" /></div>'
+      ]
+    }),
+    settingsSectionTemplate({
+      title: 'Typy ošetření',
+      subtitle: 'Název, cena a poznámka.',
+      formId: 'treatments',
+      listId: 'treatmentList',
+      fields: [
+        '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
+        '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>',
+        '<div class="field"><label>Poznámka</label><input type="text" data-field="note" /></div>'
+      ]
+    }),
+    settingsSectionTemplate({
+      title: 'Příplatky',
+      subtitle: 'Položky k ošetření.',
+      formId: 'addons',
+      listId: 'addonList',
+      fields: [
+        '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
+        '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>'
+      ]
+    })
+  ];
+
+  if (state.auth.user?.role === 'admin') {
+    sections.push(
+      settingsSectionTemplate({
+        title: 'Uživatelé',
+        subtitle: 'Přihlašovací účty a role.',
+        formId: 'users',
+        listId: 'userList',
+        fields: [
+          '<div class="field"><label>Jméno</label><input type="text" data-field="full_name" /></div>',
+          '<div class="field"><label>Uživatelské jméno</label><input type="text" data-field="username" /></div>',
+          '<div class="field"><label>Role</label><select data-field="role"><option value="worker">Pracovník</option><option value="reception">Recepční</option><option value="admin">Administrátor</option></select></div>',
+          '<div class="field"><label>Heslo</label><input type="password" data-field="password" placeholder="Nové heslo" /></div>'
+        ]
+      })
+    );
+  }
+
+  grid.innerHTML = sections.join('');
+
+  renderSettingsLists();
+  wireSettingsForms();
+}
+
+function renderSettingsLists() {
+  const serviceList = document.getElementById('serviceList');
+  if (serviceList) {
+    serviceList.innerHTML = state.settings.services
+      .map((item) => {
+        const label = item.form_type === 'cosmetic' ? 'Kosmetika' : 'Obecný';
+        return settingsItemTemplate(item, label, 'services');
+      })
+      .join('');
+  }
+
+  const skinList = document.getElementById('skinList');
+  skinList.innerHTML = state.settings.skinTypes
+    .map((item) => settingsItemTemplate(item, '', 'skin'))
+    .join('');
+
+  const treatmentList = document.getElementById('treatmentList');
+  treatmentList.innerHTML = state.settings.treatments
+    .map((item) => settingsItemTemplate(item, [formatCzk(item.price), item.note].filter(Boolean).join(' • '), 'treatments'))
+    .join('');
+
+  const addonList = document.getElementById('addonList');
+  addonList.innerHTML = state.settings.addons
+    .map((item) => settingsItemTemplate(item, formatCzk(item.price), 'addons'))
+    .join('');
+
+  const userList = document.getElementById('userList');
+  if (userList) {
+    userList.innerHTML = state.users
+      .map((user) => userItemTemplate(user))
+      .join('');
+  }
+
+  document.querySelectorAll('.settings-item button[data-action="edit"]').forEach((button) => {
+    if (button.dataset.section === 'users') {
+      button.addEventListener('click', () => startEditUser(button.dataset.id));
+    } else {
+      button.addEventListener('click', () => startEditSetting(button.dataset.section, button.dataset.id));
+    }
+  });
+  document.querySelectorAll('.settings-item button[data-action="delete"]').forEach((button) => {
+    if (button.dataset.section === 'users') {
+      button.addEventListener('click', () => deleteUser(button.dataset.id));
+    } else {
+      button.addEventListener('click', () => deleteSetting(button.dataset.section, button.dataset.id));
+    }
+  });
+}
+
+function settingsItemTemplate(item, suffix = '', section = '') {
+  return `
+    <div class="settings-item">
+      <span>${item.name}${suffix ? ` • ${suffix}` : ''}</span>
+      <div class="settings-actions">
+        <button class="ghost" data-action="edit" data-section="${section}" data-id="${item.id}">Upravit</button>
+        <button class="ghost" data-action="delete" data-section="${section}" data-id="${item.id}">Smazat</button>
+      </div>
+    </div>
+  `;
+}
+
+function userItemTemplate(user) {
+  const roleLabel = user.role === 'admin' ? 'Administrátor' : user.role === 'reception' ? 'Recepční' : 'Pracovník';
+  return `
+    <div class="settings-item">
+      <span>${user.full_name} • ${user.username} • ${roleLabel}</span>
+      <div class="settings-actions">
+        <button class="ghost" data-action="edit" data-section="users" data-id="${user.id}">Upravit</button>
+        <button class="ghost" data-action="delete" data-section="users" data-id="${user.id}">Smazat</button>
+      </div>
+    </div>
+  `;
+}
+
+function wireSettingsForms() {
+  const sections = {
+    services: {
+      list: state.settings.services,
+      resource: 'services'
+    },
+    skin: {
+      list: state.settings.skinTypes,
+      resource: 'skin-types'
+    },
+    treatments: {
+      list: state.settings.treatments,
+      resource: 'treatments'
+    },
+    addons: {
+      list: state.settings.addons,
+      resource: 'addons'
+    }
+  };
+
+  if (state.auth.user?.role === 'admin') {
+    sections.users = {
+      list: state.users,
+      resource: 'users'
+    };
+  }
+
+  Object.entries(sections).forEach(([key, config]) => {
+    const form = document.querySelector(`[data-form="${key}"]`);
+    form.dataset.editing = '';
+
+    const saveButton = form.querySelector('button[data-action="save"]');
+    const resetButton = form.querySelector('button[data-action="reset"]');
+
+    saveButton.addEventListener('click', async () => {
+      const payload = {};
+      form.querySelectorAll('[data-field]').forEach((input) => {
+        payload[input.dataset.field] = input.value.trim();
+      });
+
+      const id = form.dataset.editing;
+      if (id) {
+        await api.put(`/api/${config.resource}/${id}`, payload);
+      } else {
+        await api.post(`/api/${config.resource}`, payload);
+      }
+
+      await loadSettings();
+      await openSettingsModal();
+    });
+
+    resetButton.addEventListener('click', () => {
+      form.dataset.editing = '';
+      form.querySelectorAll('[data-field]').forEach((input) => {
+        if (input.tagName === 'SELECT') {
+          input.value = input.querySelector('option')?.value || '';
+        } else {
+          input.value = '';
+        }
+      });
+    });
+
+  });
+}
+
+function startEditSetting(section, id) {
+  const form = document.querySelector(`[data-form="${section}"]`);
+  if (!form) return;
+
+  const list =
+    section === 'services'
+      ? state.settings.services
+      : section === 'skin'
+      ? state.settings.skinTypes
+      : section === 'treatments'
+        ? state.settings.treatments
+        : section === 'addons'
+          ? state.settings.addons
+          : [];
+
+  const item = list.find((entry) => entry.id === id);
+  if (!item) return;
+
+  form.dataset.editing = id;
+  form.querySelectorAll('[data-field]').forEach((input) => {
+    const value = item[input.dataset.field] ?? '';
+    input.value = value;
+  });
+}
+
+function startEditUser(id) {
+  const form = document.querySelector('[data-form="users"]');
+  if (!form) return;
+
+  const user = state.users.find((entry) => entry.id === id);
+  if (!user) return;
+
+  form.dataset.editing = id;
+  form.querySelectorAll('[data-field]').forEach((input) => {
+    if (input.dataset.field === 'password') {
+      input.value = '';
+      return;
+    }
+    const value = user[input.dataset.field] ?? '';
+    input.value = value;
+  });
+}
+
+async function deleteUser(id) {
+  const confirmDelete = confirm('Opravdu smazat uživatele?');
+  if (!confirmDelete) return;
+
+  await api.del(`/api/users/${id}`);
+  await loadUsers();
+  await openSettingsModal();
+}
+
+async function deleteSetting(section, id) {
+  const confirmDelete = confirm('Opravdu smazat položku?');
+  if (!confirmDelete) return;
+
+  const resource =
+    section === 'services'
+      ? 'services'
+      : section === 'skin'
+        ? 'skin-types'
+      : section === 'treatments'
+        ? 'treatments'
+        : 'addons';
+
+  await api.del(`/api/${resource}/${id}`);
+  await loadSettings();
+  await openSettingsModal();
+}
+
+async function handleBackup() {
+  const data = await api.get('/api/backup');
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `kartoteka-${todayLocal()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function openRestoreModal() {
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Obnova ze zálohy</h2>
+        <div class="meta">Vyber JSON soubor vytvořený funkcí Záloha.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      <input type="file" id="restoreFile" accept="application/json" />
+      <div class="actions-row">
+        <button class="primary" id="restoreBtn">Obnovit</button>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+
+  document.getElementById('restoreBtn').addEventListener('click', async () => {
+    const fileInput = document.getElementById('restoreFile');
+    const file = fileInput.files[0];
+    if (!file) {
+      alert('Vyber soubor se zálohou.');
+      return;
+    }
+    const text = await file.text();
+    const json = JSON.parse(text);
+    await api.post('/api/restore', json);
+    closeModal();
+    handleUnauthorized();
+  });
+}
+
+function wireEvents() {
+  dom.searchInput.addEventListener('input', debounce(loadClients));
+  dom.btnNew.addEventListener('click', clearSelection);
+  dom.btnCreateClient.addEventListener('click', () => createClient(false));
+  dom.btnCreateClientAndService.addEventListener('click', () => createClient(true));
+  dom.btnSave.addEventListener('click', saveClient);
+  dom.btnAddVisit.addEventListener('click', addVisit);
+  dom.btnAddGeneric.addEventListener('click', addGenericVisit);
+  if (dom.btnToggleClient) {
+    dom.btnToggleClient.addEventListener('click', () => {
+      const isHidden = dom.clientDetails?.classList.contains('hidden');
+      setClientDetailsOpen(isHidden);
+    });
+  }
+  dom.btnSettings.addEventListener('click', () => {
+    openSettingsModal().catch(() => {});
+  });
+  dom.btnEconomy.addEventListener('click', openEconomyModal);
+  dom.btnBackup.addEventListener('click', handleBackup);
+  dom.btnRestore.addEventListener('click', openRestoreModal);
+  dom.btnLogout.addEventListener('click', handleLogout);
+  dom.treatmentType.addEventListener('change', updatePricePreview);
+  dom.manualTotal.addEventListener('input', updatePricePreview);
+}
+
+async function init() {
+  dom.visitDate.value = todayLocal();
+  setClientDetailsOpen(false);
+  wireEvents();
+  updateUserUi();
+  startServerMonitor();
+  await bootstrapAuth();
+}
+
+init();

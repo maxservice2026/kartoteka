@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PRETTY VISAGE 2</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-icon">K</div>
+          <div>
+            <div class="brand-title">PRETTY VISAGE 2</div>
+            <div class="brand-subtitle"></div>
+          </div>
+        </div>
+        <div class="search">
+          <input id="searchInput" type="search" placeholder="Hledej klientku…" />
+        </div>
+        <div class="actions">
+          <button class="ghost" id="btnEconomy">Ekonomika</button>
+          <button class="ghost" id="btnSettings">Nastavení</button>
+          <button class="ghost" id="btnBackup">Záloha</button>
+          <button class="ghost" id="btnRestore">Obnova</button>
+        </div>
+        <div class="server-status" id="serverStatus">
+          <span class="status-dot" id="serverDot"></span>
+          <span id="serverText">Server: neznámý</span>
+        </div>
+        <div class="user-info">
+          <span id="userInfo"></span>
+          <button class="ghost" id="btnLogout">Odhlásit</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel" aria-label="Karta klientky">
+          <div id="newClientView">
+            <div class="panel-header">
+              <h2>Nová klientka</h2>
+            </div>
+            <div class="hint">
+              Vyplň základní údaje. Po uložení můžeš rovnou vybrat službu.
+            </div>
+            <form id="newClientForm" class="form">
+              <div class="field-row">
+                <div class="field">
+                  <label>Jméno</label>
+                  <input id="newFirstName" type="text" placeholder="Jméno" />
+                </div>
+                <div class="field">
+                  <label>Příjmení</label>
+                  <input id="newLastName" type="text" placeholder="Příjmení" />
+                </div>
+              </div>
+              <div class="field">
+                <label>Telefon</label>
+                <input id="newPhone" type="tel" placeholder="Telefon" />
+              </div>
+              <div class="field">
+                <label>E-mail</label>
+                <input id="newEmail" type="email" placeholder="E-mail" />
+              </div>
+              <div class="actions-row">
+                <button type="button" id="btnCreateClient" class="ghost">Uložit</button>
+                <button type="button" id="btnCreateClientAndService" class="primary">Uložit a vybrat službu</button>
+              </div>
+            </form>
+          </div>
+
+          <div id="clientView" class="hidden">
+            <div class="panel-header">
+              <h2 id="clientTitle">Karta klientky</h2>
+              <button type="button" id="btnNew" class="ghost">Nová klientka</button>
+            </div>
+
+            <div class="service-section">
+              <div class="panel-header">
+                <h3>Nová služba</h3>
+              </div>
+              <div class="service-picker" id="servicePicker"></div>
+
+              <div id="serviceFormCosmetic" class="service-form hidden">
+                <div class="field">
+                  <label>Typ ošetření</label>
+                  <select id="treatmentType"></select>
+                </div>
+
+                <div class="addon-block">
+                  <div class="addon-title">Příplatky</div>
+                  <div id="addonsList" class="addon-list"></div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <label>Základní cena</label>
+                    <input id="basePrice" type="text" readonly />
+                  </div>
+                  <div class="field">
+                    <label>Příplatky celkem</label>
+                    <input id="addonsTotal" type="text" readonly />
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <label>Cena celkem (ručně)</label>
+                    <input id="manualTotal" type="number" min="0" step="1" placeholder="Volitelně" />
+                  </div>
+                  <div class="field">
+                    <label>Výsledná cena</label>
+                    <input id="finalTotal" type="text" readonly />
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                  <label>Uživatel (pro ekonomiku)</label>
+                    <select id="worker"></select>
+                  </div>
+                  <div class="field">
+                    <label>Platba</label>
+                    <select id="paymentMethod">
+                      <option value="cash">Hotově</option>
+                      <option value="transfer">Převodem</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label>Poznámka</label>
+                  <textarea id="visitNote" rows="3" placeholder="Poznámka ke službě"></textarea>
+                </div>
+                <div class="field">
+                  <label>Datum služby</label>
+                  <input id="visitDate" type="date" />
+                </div>
+
+                <div class="actions-row">
+                  <button type="button" id="btnAddVisit" class="primary">Uložit službu</button>
+                </div>
+              </div>
+
+              <div id="serviceFormGeneric" class="service-form hidden">
+                <div class="field-row">
+                  <div class="field">
+                    <label>Pole 1</label>
+                    <input id="genText1" type="text" />
+                  </div>
+                  <div class="field">
+                    <label>Pole 2</label>
+                    <input id="genText2" type="text" />
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Pole 3</label>
+                  <input id="genText3" type="text" />
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <label>Výběr 1</label>
+                    <select id="genSelect1">
+                      <option value="">—</option>
+                      <option value="A">Možnost A</option>
+                      <option value="B">Možnost B</option>
+                      <option value="C">Možnost C</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>Výběr 2</label>
+                    <select id="genSelect2">
+                      <option value="">—</option>
+                      <option value="A">Možnost A</option>
+                      <option value="B">Možnost B</option>
+                      <option value="C">Možnost C</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Výběr 3</label>
+                  <select id="genSelect3">
+                    <option value="">—</option>
+                    <option value="A">Možnost A</option>
+                    <option value="B">Možnost B</option>
+                    <option value="C">Možnost C</option>
+                  </select>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <label>Cena služby</label>
+                    <input id="genPrice" type="number" min="0" step="1" />
+                  </div>
+                  <div class="field">
+                    <label>Datum služby</label>
+                    <input id="genDate" type="date" />
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                  <label>Uživatel (pro ekonomiku)</label>
+                    <select id="genWorker"></select>
+                  </div>
+                  <div class="field">
+                    <label>Platba</label>
+                    <select id="genPaymentMethod">
+                      <option value="cash">Hotově</option>
+                      <option value="transfer">Převodem</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label>Poznámka</label>
+                  <textarea id="genNote" rows="3"></textarea>
+                </div>
+
+                <div class="actions-row">
+                  <button type="button" id="btnAddGeneric" class="primary">Uložit službu</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="hint">
+              Uložit kartu = uloží údaje klientky (bez služby).
+            </div>
+
+            <div class="actions-row">
+              <button type="button" id="btnToggleClient" class="ghost">Upravit údaje klientky</button>
+            </div>
+
+            <div id="clientDetails" class="hidden">
+              <form id="clientForm" class="form">
+                <div class="field">
+                  <label>Jméno a příjmení</label>
+                  <input id="fullName" type="text" placeholder="Jméno a příjmení" />
+                </div>
+                <div class="field">
+                  <label>Telefon</label>
+                  <input id="phone" type="tel" placeholder="Telefon" />
+                </div>
+                <div class="field">
+                  <label>E-mail</label>
+                  <input id="email" type="email" placeholder="E-mail" />
+                </div>
+                <div class="field">
+                  <label>Typ pleti</label>
+                  <select id="skinType"></select>
+                </div>
+                <div class="field">
+                  <label>Péče o pleť</label>
+                  <textarea id="skinNotes" rows="3" placeholder="Doplňující informace"></textarea>
+                </div>
+                <div class="field">
+                  <label>Krém</label>
+                  <input id="cream" type="text" placeholder="Krém" />
+                </div>
+                <div class="actions-row">
+                  <button type="button" id="btnSave" class="ghost">Uložit kartu</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="history">
+              <div class="panel-header">
+                <h3>Historie návštěv</h3>
+              </div>
+              <div id="visitsList" class="history-list"></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel" aria-label="Seznam klientek">
+          <div class="panel-header">
+            <h2>Klientky</h2>
+            <div class="meta" id="summaryCounts"></div>
+          </div>
+          <div class="hint">
+            Vyhledávání funguje už od 1 znaku. Klikni na klientku pro detail a historii.
+          </div>
+          <div class="clients" id="clientsList"></div>
+          <div class="stats" id="summaryStats"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="authRoot"></div>
+    <div id="modalRoot"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
