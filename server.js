@@ -440,7 +440,7 @@ async function getSettings() {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, db: usePostgres ? 'postgres' : 'sqlite' });
 });
 
 app.get('/api/bootstrap', async (req, res) => {
