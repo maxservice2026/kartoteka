@@ -14,3 +14,5 @@ Webova aplikace pro kartoteku kosmetickeho salonu.
 SQLite databaze je v `data/kartoteka.sqlite`.
 Zaloha a obnova funguji pres JSON soubor ve webovem rozhrani.
 Pri obnoveni se zneplatni prihlaseni a je potreba se znovu prihlasit.
+
+zmena
