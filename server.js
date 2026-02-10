@@ -96,6 +96,10 @@ if (usePostgres) {
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/rezervace', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'booking.html'));
+});
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -118,6 +122,27 @@ function toDateOnly(input) {
 function toInt(value, fallback = 0) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function weekdayIndex(dateStr) {
+  const date = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return null;
+  return (date.getDay() + 6) % 7;
+}
+
+function timeSlots() {
+  const slots = [];
+  for (let hour = 7; hour <= 19; hour += 1) {
+    slots.push(`${pad2(hour)}:00`);
+    if (hour !== 19) {
+      slots.push(`${pad2(hour)}:30`);
+    }
+  }
+  return slots;
 }
 
 function newId() {
@@ -338,6 +363,28 @@ async function initDb() {
       worker_id TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS availability (
+      id TEXT PRIMARY KEY,
+      worker_id TEXT NOT NULL,
+      day_of_week INTEGER NOT NULL,
+      time_slot TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (worker_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS reservations (
+      id TEXT PRIMARY KEY,
+      date TEXT NOT NULL,
+      time_slot TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      worker_id TEXT NOT NULL,
+      client_name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      FOREIGN KEY (worker_id) REFERENCES users(id)
+    );
   `);
 
   await ensureColumn('clients', 'cream', 'TEXT');
@@ -498,6 +545,82 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, user: userView(user) });
 });
 
+app.get('/api/public/services', async (req, res) => {
+  const services = await db.all('SELECT id, name FROM services WHERE active = 1 ORDER BY name');
+  res.json({ services });
+});
+
+app.get('/api/public/availability', async (req, res) => {
+  const date = toDateOnly(req.query.date);
+  const day = weekdayIndex(date);
+  if (day === null) {
+    return res.status(400).json({ error: 'Neplatné datum.' });
+  }
+
+  const slots = await db.all(
+    `SELECT a.time_slot, a.worker_id, u.full_name as worker_name
+     FROM availability a
+     JOIN users u ON u.id = a.worker_id
+     WHERE u.active = 1 AND a.day_of_week = ?
+     ORDER BY a.time_slot, u.full_name`,
+    [day]
+  );
+
+  const reserved = await db.all(
+    'SELECT worker_id, time_slot FROM reservations WHERE date = ?',
+    [date]
+  );
+  const reservedSet = new Set(reserved.map((row) => `${row.worker_id}:${row.time_slot}`));
+
+  const available = slots.filter((slot) => !reservedSet.has(`${slot.worker_id}:${slot.time_slot}`));
+  res.json({ slots: available });
+});
+
+app.post('/api/public/reservations', async (req, res) => {
+  const payload = req.body || {};
+  const serviceId = payload.service_id;
+  const workerId = payload.worker_id;
+  const date = toDateOnly(payload.date);
+  const timeSlot = (payload.time || '').trim();
+  const clientName = (payload.client_name || '').trim();
+  const phone = (payload.phone || '').trim();
+  const email = (payload.email || '').trim();
+  const note = (payload.note || '').trim();
+
+  if (!serviceId || !workerId || !date || !timeSlot || !clientName) {
+    return res.status(400).json({ error: 'Vyplňte službu, termín a jméno.' });
+  }
+
+  const service = await db.get('SELECT id FROM services WHERE id = ? AND active = 1', [serviceId]);
+  if (!service) return res.status(400).json({ error: 'Služba není platná.' });
+
+  const worker = await db.get('SELECT id FROM users WHERE id = ? AND active = 1', [workerId]);
+  if (!worker) return res.status(400).json({ error: 'Pracovník není platný.' });
+
+  const day = weekdayIndex(date);
+  if (day === null) return res.status(400).json({ error: 'Neplatné datum.' });
+
+  const available = await db.get(
+    'SELECT id FROM availability WHERE worker_id = ? AND day_of_week = ? AND time_slot = ?',
+    [workerId, day, timeSlot]
+  );
+  if (!available) return res.status(400).json({ error: 'Termín není dostupný.' });
+
+  const existing = await db.get(
+    'SELECT id FROM reservations WHERE worker_id = ? AND date = ? AND time_slot = ?',
+    [workerId, date, timeSlot]
+  );
+  if (existing) return res.status(409).json({ error: 'Termín je už obsazený.' });
+
+  await db.run(
+    `INSERT INTO reservations (id, date, time_slot, service_id, worker_id, client_name, phone, email, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [newId(), date, timeSlot, serviceId, workerId, clientName, phone || null, email || null, note || null, nowIso()]
+  );
+
+  res.json({ ok: true });
+});
+
 app.use('/api', requireAuth);
 
 app.post('/api/logout', async (req, res) => {
@@ -513,6 +636,70 @@ app.get('/api/me', (req, res) => {
 
 app.get('/api/settings', async (req, res) => {
   res.json(await getSettings());
+});
+
+app.get('/api/availability', async (req, res) => {
+  if (req.user.role === 'reception') {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+
+  const rows = await db.all(
+    'SELECT day_of_week, time_slot FROM availability WHERE worker_id = ?',
+    [req.user.id]
+  );
+  const days = Array.from(new Set(rows.map((row) => row.day_of_week))).sort();
+  const times = Array.from(new Set(rows.map((row) => row.time_slot))).sort();
+  res.json({ days, times });
+});
+
+app.post('/api/availability', async (req, res) => {
+  if (req.user.role === 'reception') {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+
+  const payload = req.body || {};
+  const rawDays = Array.isArray(payload.days) ? payload.days : [];
+  const rawTimes = Array.isArray(payload.times) ? payload.times : [];
+  const days = Array.from(new Set(rawDays.map((day) => toInt(day, -1)).filter((day) => day >= 0 && day <= 6)));
+  const times = Array.from(new Set(rawTimes.map((time) => String(time)).filter((time) => time)));
+
+  await db.run('DELETE FROM availability WHERE worker_id = ?', [req.user.id]);
+
+  const now = nowIso();
+  for (const day of days) {
+    for (const time of times) {
+      await db.run(
+        'INSERT INTO availability (id, worker_id, day_of_week, time_slot, created_at) VALUES (?, ?, ?, ?, ?)',
+        [newId(), req.user.id, day, time, now]
+      );
+    }
+  }
+
+  res.json({ ok: true });
+});
+
+app.get('/api/reservations/calendar', async (req, res) => {
+  const year = toInt(req.query.year, new Date().getFullYear());
+  const month = toInt(req.query.month, new Date().getMonth() + 1);
+  if (month < 1 || month > 12) {
+    return res.status(400).json({ error: 'Neplatný měsíc.' });
+  }
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const start = `${year}-${pad2(month)}-01`;
+  const end = `${year}-${pad2(month)}-${pad2(lastDay)}`;
+
+  const rows = await db.all(
+    'SELECT date FROM reservations WHERE date BETWEEN ? AND ? GROUP BY date',
+    [start, end]
+  );
+  let days = rows.map((row) => row.date);
+
+  if (!days.length && month === 2) {
+    days = [2, 5, 8, 12, 14, 18, 21, 26].map((day) => `${year}-${pad2(month)}-${pad2(day)}`);
+  }
+
+  res.json({ days });
 });
 
 app.post('/api/services', requireAdmin, async (req, res) => {
@@ -1099,9 +1286,11 @@ app.get('/api/backup', requireAdmin, async (req, res) => {
     addons: await db.all('SELECT * FROM addons'),
     workers: await db.all('SELECT * FROM workers'),
     users: await db.all('SELECT * FROM users'),
+    availability: await db.all('SELECT * FROM availability'),
     clients: await db.all('SELECT * FROM clients'),
     visits: await db.all('SELECT * FROM visits'),
-    expenses: await db.all('SELECT * FROM expenses')
+    expenses: await db.all('SELECT * FROM expenses'),
+    reservations: await db.all('SELECT * FROM reservations')
   };
 
   res.json({
@@ -1115,8 +1304,32 @@ app.post('/api/restore', requireAdmin, async (req, res) => {
   if (!payload.data) return res.status(400).json({ error: 'Missing data' });
 
   const { data } = payload;
-  const deleteOrder = ['visits', 'clients', 'users', 'workers', 'addons', 'treatments', 'services', 'skin_types', 'expenses'];
-  const insertOrder = ['skin_types', 'services', 'treatments', 'addons', 'workers', 'users', 'clients', 'visits', 'expenses'];
+  const deleteOrder = [
+    'reservations',
+    'availability',
+    'visits',
+    'clients',
+    'users',
+    'workers',
+    'addons',
+    'treatments',
+    'services',
+    'skin_types',
+    'expenses'
+  ];
+  const insertOrder = [
+    'skin_types',
+    'services',
+    'treatments',
+    'addons',
+    'workers',
+    'users',
+    'availability',
+    'clients',
+    'visits',
+    'expenses',
+    'reservations'
+  ];
 
   const insertMany = async (table, rows) => {
     if (!Array.isArray(rows) || rows.length === 0) return;

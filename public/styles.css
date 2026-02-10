@@ -521,6 +521,73 @@ button.primary:hover {
   border-color: rgba(27, 79, 216, 0.35);
 }
 
+.booking-page {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", sans-serif;
+}
+
+.booking-layout {
+  max-width: 960px;
+  margin: 40px auto 80px;
+  padding: 0 20px;
+  display: grid;
+  gap: 20px;
+}
+
+.booking-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.slot-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.slot-button.active {
+  border-color: var(--accent);
+  background: rgba(244, 114, 43, 0.12);
+}
+
+.availability-section {
+  margin-top: 10px;
+}
+
+.availability-days,
+.availability-times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.availability-times {
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.checkbox-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-pill input {
+  margin: 0;
+}
+
 .auth-screen {
   position: fixed;
   inset: 0;

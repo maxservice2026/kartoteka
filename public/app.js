@@ -879,6 +879,18 @@ function monthName(monthIndex) {
   ][monthIndex];
 }
 
+function timeSlots() {
+  const slots = [];
+  for (let hour = 7; hour <= 19; hour += 1) {
+    const label = String(hour).padStart(2, '0');
+    slots.push(`${label}:00`);
+    if (hour !== 19) {
+      slots.push(`${label}:30`);
+    }
+  }
+  return slots;
+}
+
 function sampleReservationsForMonth(year, month) {
   const sampleDays = [2, 5, 8, 12, 14, 18, 21, 26];
   return new Set(
@@ -926,23 +938,93 @@ async function openCalendarModal() {
   const now = new Date();
   const year = now.getFullYear();
   const month = 1; // únor (demo)
-  const reservations = sampleReservationsForMonth(year, month);
+  let reservations = new Set();
+  try {
+    const data = await api.get(`/api/reservations/calendar?year=${year}&month=${month + 1}`);
+    reservations = new Set(data.days || []);
+  } catch (err) {
+    reservations = sampleReservationsForMonth(year, month);
+  }
+
+  const canEditAvailability = state.auth.user?.role !== 'reception';
+  const days = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'];
+  const dayCheckboxes = days
+    .map(
+      (label, index) => `
+        <label class="checkbox-pill">
+          <input type="checkbox" class="availability-day" value="${index}" />
+          ${label}
+        </label>
+      `
+    )
+    .join('');
+  const timeCheckboxes = timeSlots()
+    .map(
+      (time) => `
+        <label class="checkbox-pill">
+          <input type="checkbox" class="availability-time" value="${time}" />
+          ${time}
+        </label>
+      `
+    )
+    .join('');
 
   openModal(`
     <div class="modal-header">
       <div>
         <h2>Kalendář</h2>
-        <div class="meta">Rezervace pro únor ${year} (demo)</div>
+        <div class="meta">Rezervace pro únor ${year}</div>
       </div>
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
       ${buildCalendarHtml(year, month, reservations)}
       <div class="hint">Modrá tečka značí den s rezervací.</div>
+      ${
+        canEditAvailability
+          ? `
+            <div class="settings-section availability-section">
+              <h3>Moje dostupnost</h3>
+              <div class="meta">Vyber pracovní dny a časy (platí každý týden).</div>
+              <div class="availability-days">${dayCheckboxes}</div>
+              <div class="availability-times">${timeCheckboxes}</div>
+              <div class="actions-row">
+                <button class="primary" id="availabilitySave">Uložit dostupnost</button>
+              </div>
+            </div>
+          `
+          : ''
+      }
     </div>
   `);
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
+
+  if (canEditAvailability) {
+    const data = await api.get('/api/availability');
+    const daySet = new Set(data.days || []);
+    const timeSet = new Set(data.times || []);
+    document.querySelectorAll('.availability-day').forEach((input) => {
+      input.checked = daySet.has(Number(input.value));
+    });
+    document.querySelectorAll('.availability-time').forEach((input) => {
+      input.checked = timeSet.has(input.value);
+    });
+
+    document.getElementById('availabilitySave').addEventListener('click', async () => {
+      const selectedDays = Array.from(document.querySelectorAll('.availability-day:checked')).map((input) =>
+        Number(input.value)
+      );
+      const selectedTimes = Array.from(document.querySelectorAll('.availability-time:checked')).map(
+        (input) => input.value
+      );
+      await api.post('/api/availability', {
+        days: selectedDays,
+        times: selectedTimes
+      });
+      alert('Dostupnost uložena.');
+    });
+  }
 }
 
 async function openEconomyModal() {

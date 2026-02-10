@@ -1,0 +1,130 @@
+const dom = {
+  service: document.getElementById('publicService'),
+  date: document.getElementById('publicDate'),
+  slots: document.getElementById('publicSlots'),
+  slotsHint: document.getElementById('publicSlotsHint'),
+  name: document.getElementById('publicName'),
+  phone: document.getElementById('publicPhone'),
+  email: document.getElementById('publicEmail'),
+  note: document.getElementById('publicNote'),
+  submit: document.getElementById('publicSubmit'),
+  result: document.getElementById('publicResult')
+};
+
+const state = {
+  services: [],
+  selectedSlot: null
+};
+
+function todayLocal() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 10);
+}
+
+function setResult(message, isError = false) {
+  dom.result.textContent = message;
+  dom.result.style.color = isError ? '#d0422b' : '#1f9a4c';
+}
+
+async function fetchServices() {
+  const response = await fetch('/api/public/services');
+  const data = await response.json();
+  state.services = data.services || [];
+  dom.service.innerHTML =
+    '<option value="">Vyber službu</option>' +
+    state.services.map((service) => `<option value="${service.id}">${service.name}</option>`).join('');
+}
+
+function renderSlots(slots, hintText = '') {
+  dom.slots.innerHTML = '';
+  dom.slotsHint.classList.toggle('hidden', Boolean(slots.length));
+  if (!slots.length) {
+    dom.slotsHint.textContent = hintText || 'Pro vybraný den nejsou volné termíny.';
+    return;
+  }
+
+  slots.forEach((slot) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost slot-button';
+    button.textContent = `${slot.time_slot} • ${slot.worker_name}`;
+    button.dataset.workerId = slot.worker_id;
+    button.dataset.time = slot.time_slot;
+    button.addEventListener('click', () => {
+      document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
+      button.classList.add('active');
+      state.selectedSlot = {
+        worker_id: slot.worker_id,
+        time: slot.time_slot,
+        worker_name: slot.worker_name
+      };
+      dom.submit.disabled = false;
+    });
+    dom.slots.appendChild(button);
+  });
+}
+
+async function loadSlots() {
+  const serviceId = dom.service.value;
+  const date = dom.date.value;
+  dom.submit.disabled = true;
+  state.selectedSlot = null;
+  if (!serviceId || !date) {
+    renderSlots([], 'Zvol službu a datum.');
+    return;
+  }
+
+  const response = await fetch(`/api/public/availability?date=${encodeURIComponent(date)}&service_id=${serviceId}`);
+  const data = await response.json();
+  renderSlots(data.slots || []);
+}
+
+async function submitReservation() {
+  const payload = {
+    service_id: dom.service.value,
+    date: dom.date.value,
+    time: state.selectedSlot?.time,
+    worker_id: state.selectedSlot?.worker_id,
+    client_name: dom.name.value.trim(),
+    phone: dom.phone.value.trim(),
+    email: dom.email.value.trim(),
+    note: dom.note.value.trim()
+  };
+
+  if (!payload.service_id || !payload.date || !payload.time || !payload.worker_id || !payload.client_name) {
+    setResult('Doplň službu, termín a jméno.', true);
+    return;
+  }
+
+  const response = await fetch('/api/public/reservations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    setResult(data?.error || 'Rezervaci se nepodařilo uložit.', true);
+    return;
+  }
+
+  setResult('Rezervace byla odeslána. Brzy se vám ozveme.', false);
+  dom.name.value = '';
+  dom.phone.value = '';
+  dom.email.value = '';
+  dom.note.value = '';
+  dom.submit.disabled = true;
+  await loadSlots();
+}
+
+async function init() {
+  dom.date.value = todayLocal();
+  await fetchServices();
+  await loadSlots();
+
+  dom.service.addEventListener('change', loadSlots);
+  dom.date.addEventListener('change', loadSlots);
+  dom.submit.addEventListener('click', submitReservation);
+}
+
+init();
