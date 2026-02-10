@@ -668,13 +668,12 @@ app.get('/api/public/availability', async (req, res) => {
   availableByWorker.forEach((value, workerId) => {
     const reservedSlots = reservedByWorker.get(workerId) || new Set();
     value.slots.forEach((slot) => {
-      if (!reservedSlots.has(slot)) {
-        baseSlots.push({
-          time_slot: slot,
-          worker_id: workerId,
-          worker_name: value.worker_name
-        });
-      }
+      baseSlots.push({
+        time_slot: slot,
+        worker_id: workerId,
+        worker_name: value.worker_name,
+        reserved: reservedSlots.has(slot)
+      });
     });
   });
 

@@ -581,6 +581,23 @@ button.primary:hover {
   font-weight: 600;
 }
 
+.slot-button.is-reserved {
+  border-style: dashed;
+  color: #9b9b9b;
+  text-decoration: line-through;
+  background: rgba(148, 148, 148, 0.08);
+}
+
+.slot-status {
+  display: inline-flex;
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #d0422b;
+}
+
 .slot-button.is-valid {
   border-color: #1f9a4c;
   background: rgba(31, 154, 76, 0.18);

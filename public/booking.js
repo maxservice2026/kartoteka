@@ -71,10 +71,12 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     if (!baseByWorker.has(slot.worker_id)) {
       baseByWorker.set(slot.worker_id, {
         worker_name: slot.worker_name,
-        slots: new Set()
+        slots: new Map()
       });
     }
-    baseByWorker.get(slot.worker_id).slots.add(slot.time_slot);
+    baseByWorker.get(slot.worker_id).slots.set(slot.time_slot, {
+      reserved: Boolean(slot.reserved)
+    });
   });
 
   const startByWorker = new Map();
@@ -94,11 +96,12 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     });
     const startIndex = slotList.indexOf(startTime);
     if (startIndex === -1) return false;
-    const workerSlots = baseByWorker.get(workerId)?.slots || new Set();
+    const workerSlots = baseByWorker.get(workerId)?.slots || new Map();
     let ok = true;
     for (let i = 0; i < requiredSlots; i += 1) {
       const slot = slotList[startIndex + i];
-      if (!slot || !workerSlots.has(slot)) {
+      const slotMeta = slot ? workerSlots.get(slot) : null;
+      if (!slot || !slotMeta || slotMeta.reserved) {
         ok = false;
         break;
       }
@@ -117,13 +120,19 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'ghost slot-button';
-    button.textContent = `${slot.time_slot} • ${slot.worker_name}`;
+    button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>${
+      slot.reserved ? '<span class="slot-status">Rezervováno</span>' : ''
+    }`;
     button.dataset.workerId = slot.worker_id;
     button.dataset.time = slot.time_slot;
-    if (startByWorker.get(slot.worker_id)?.has(slot.time_slot)) {
+    if (slot.reserved) {
+      button.classList.add('is-reserved');
+      button.disabled = true;
+    } else if (startByWorker.get(slot.worker_id)?.has(slot.time_slot)) {
       button.classList.add('is-start');
     }
     button.addEventListener('click', () => {
+      if (slot.reserved) return;
       document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
       button.classList.add('active');
       state.selectedSlot = {
