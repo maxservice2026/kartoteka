@@ -51,6 +51,9 @@ const dom = {
   btnAddGeneric: document.getElementById('btnAddGeneric'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
+  btnCalendar: document.getElementById('btnCalendar'),
+  btnBilling: document.getElementById('btnBilling'),
+  btnNotifications: document.getElementById('btnNotifications'),
   btnLogout: document.getElementById('btnLogout'),
   serverStatus: document.getElementById('serverStatus'),
   serverDot: document.getElementById('serverDot'),
@@ -859,6 +862,89 @@ function monthRange() {
   };
 }
 
+function monthName(monthIndex) {
+  return [
+    'leden',
+    'únor',
+    'březen',
+    'duben',
+    'květen',
+    'červen',
+    'červenec',
+    'srpen',
+    'září',
+    'říjen',
+    'listopad',
+    'prosinec'
+  ][monthIndex];
+}
+
+function sampleReservationsForMonth(year, month) {
+  const sampleDays = [2, 5, 8, 12, 14, 18, 21, 26];
+  return new Set(
+    sampleDays.map((day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+  );
+}
+
+function buildCalendarHtml(year, month, reservations) {
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const weekdayOffset = (firstDay.getDay() + 6) % 7;
+  const totalCells = Math.ceil((weekdayOffset + daysInMonth) / 7) * 7;
+
+  const cells = [];
+  for (let i = 0; i < totalCells; i += 1) {
+    const dayNumber = i - weekdayOffset + 1;
+    if (dayNumber < 1 || dayNumber > daysInMonth) {
+      cells.push('<div class="calendar-day empty"></div>');
+      continue;
+    }
+    const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNumber).padStart(2, '0')}`;
+    const hasReservation = reservations.has(dateKey);
+    cells.push(`
+      <div class="calendar-day${hasReservation ? ' has-reservation' : ''}">
+        <div class="calendar-day-number">${dayNumber}</div>
+        ${hasReservation ? '<span class="calendar-dot"></span>' : ''}
+      </div>
+    `);
+  }
+
+  return `
+    <div class="calendar">
+      <div class="calendar-month">${monthName(month)} ${year}</div>
+      <div class="calendar-weekdays">
+        <span>Po</span><span>Út</span><span>St</span><span>Čt</span><span>Pá</span><span>So</span><span>Ne</span>
+      </div>
+      <div class="calendar-grid">
+        ${cells.join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function openCalendarModal() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = 1; // únor (demo)
+  const reservations = sampleReservationsForMonth(year, month);
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Kalendář</h2>
+        <div class="meta">Rezervace pro únor ${year} (demo)</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      ${buildCalendarHtml(year, month, reservations)}
+      <div class="hint">Modrá tečka značí den s rezervací.</div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+}
+
 async function openEconomyModal() {
   const range = monthRange();
   const isAdmin = state.auth.user?.role === 'admin';
@@ -1525,6 +1611,9 @@ function wireEvents() {
     openSettingsModal().catch(() => {});
   });
   dom.btnEconomy.addEventListener('click', openEconomyModal);
+  if (dom.btnCalendar) {
+    dom.btnCalendar.addEventListener('click', openCalendarModal);
+  }
   dom.btnLogout.addEventListener('click', handleLogout);
   dom.treatmentType.addEventListener('change', updatePricePreview);
   dom.manualTotal.addEventListener('input', updatePricePreview);

@@ -462,6 +462,65 @@ button.primary:hover {
   margin-bottom: 12px;
 }
 
+.calendar {
+  display: grid;
+  gap: 10px;
+}
+
+.calendar-month {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(36px, 1fr));
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(36px, 1fr));
+  gap: 6px;
+}
+
+.calendar-day {
+  min-height: 52px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.calendar-day.empty {
+  border: none;
+  background: transparent;
+}
+
+.calendar-day-number {
+  font-weight: 600;
+}
+
+.calendar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #1b4fd8;
+}
+
+.calendar-day.has-reservation {
+  border-color: rgba(27, 79, 216, 0.35);
+}
+
 .auth-screen {
   position: fixed;
   inset: 0;
