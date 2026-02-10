@@ -632,18 +632,27 @@ app.get('/api/public/availability', async (req, res) => {
   );
 
   const reserved = await db.all(
-    `SELECT r.worker_id, r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes
+    `SELECT r.worker_id, r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes,
+            u.full_name as worker_name
      FROM reservations r
      LEFT JOIN services s ON s.id = r.service_id
+     JOIN users u ON u.id = r.worker_id
      WHERE r.date = ?`,
     [date]
   );
 
   const reservationsByWorker = new Map();
   const reservedByWorker = new Map();
+  const workerNameById = new Map();
+  slots.forEach((slot) => {
+    workerNameById.set(slot.worker_id, slot.worker_name);
+  });
   reserved.forEach((row) => {
     const startIndex = slotIndex[row.time_slot];
     if (startIndex === undefined) return;
+    if (row.worker_name) {
+      workerNameById.set(row.worker_id, row.worker_name);
+    }
     const needed = Math.max(1, Math.ceil(toInt(row.duration_minutes, 30) / 30));
     const endIndex = startIndex + needed;
     if (!reservationsByWorker.has(row.worker_id)) reservationsByWorker.set(row.worker_id, []);
@@ -678,6 +687,21 @@ app.get('/api/public/availability', async (req, res) => {
         worker_name: value.worker_name,
         reserved: reservedSlots.has(slot)
       });
+    });
+  });
+  const baseSlotKeys = new Set(baseSlots.map((slot) => `${slot.worker_id}:${slot.time_slot}`));
+  reservedByWorker.forEach((times, workerId) => {
+    const workerName = workerNameById.get(workerId) || 'Pracovník';
+    times.forEach((time) => {
+      const key = `${workerId}:${time}`;
+      if (baseSlotKeys.has(key)) return;
+      baseSlots.push({
+        time_slot: time,
+        worker_id: workerId,
+        worker_name: workerName,
+        reserved: true
+      });
+      baseSlotKeys.add(key);
     });
   });
 
