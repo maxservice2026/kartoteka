@@ -41,7 +41,7 @@ async function fetchServices() {
     state.services
       .map(
         (service) =>
-          `<option value="${service.id}" data-duration="${service.duration_minutes || 30}">${service.name}</option>`
+          `<option value="${service.id}" data-duration="${service.duration_minutes || 30}">${service.name} (${service.duration_minutes || 30} minut)</option>`
       )
       .join('');
 }
