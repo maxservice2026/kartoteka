@@ -3,24 +3,95 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
 
-const dataDir = path.join(__dirname, 'data');
-const dbPath = process.env.DB_PATH
-  ? path.resolve(process.env.DB_PATH)
-  : path.join(dataDir, 'kartoteka.sqlite');
-const dbDir = path.dirname(dbPath);
+const usePostgres = Boolean(process.env.DATABASE_URL);
 
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+function splitStatements(sql) {
+  return sql
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean);
 }
-const db = new Database(dbPath);
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+function toPgSql(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
+}
+
+function createPostgresAdapter(pool) {
+  return {
+    isPostgres: true,
+    async get(sql, params = []) {
+      const result = await pool.query(toPgSql(sql), params);
+      return result.rows[0] || null;
+    },
+    async all(sql, params = []) {
+      const result = await pool.query(toPgSql(sql), params);
+      return result.rows;
+    },
+    async run(sql, params = []) {
+      const result = await pool.query(toPgSql(sql), params);
+      return { changes: result.rowCount };
+    },
+    async exec(sql) {
+      const statements = splitStatements(sql);
+      for (const statement of statements) {
+        await pool.query(statement);
+      }
+    }
+  };
+}
+
+function createSqliteAdapter(sqlite) {
+  return {
+    isPostgres: false,
+    async get(sql, params = []) {
+      return sqlite.prepare(sql).get(params);
+    },
+    async all(sql, params = []) {
+      return sqlite.prepare(sql).all(params);
+    },
+    async run(sql, params = []) {
+      const info = sqlite.prepare(sql).run(params);
+      return { changes: info.changes, lastInsertRowid: info.lastInsertRowid };
+    },
+    async exec(sql) {
+      sqlite.exec(sql);
+    }
+  };
+}
+
+let db;
+
+if (usePostgres) {
+  const needsSsl = !process.env.PGSSLMODE || process.env.PGSSLMODE !== 'disable';
+  const ssl = needsSsl && !process.env.DATABASE_URL.includes('localhost')
+    ? { rejectUnauthorized: false }
+    : false;
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl
+  });
+  db = createPostgresAdapter(pool);
+} else {
+  const dataDir = path.join(__dirname, 'data');
+  const dbPath = process.env.DB_PATH
+    ? path.resolve(process.env.DB_PATH)
+    : path.join(dataDir, 'kartoteka.sqlite');
+  const dbDir = path.dirname(dbPath);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+  const sqlite = new Database(dbPath);
+  sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('foreign_keys = ON');
+  db = createSqliteAdapter(sqlite);
+}
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -53,10 +124,15 @@ function newId() {
   return crypto.randomUUID();
 }
 
-function ensureColumn(table, column, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
-  if (!columns.includes(column)) {
-    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+async function ensureColumn(table, column, definition) {
+  if (db.isPostgres) {
+    await db.exec(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${definition}`);
+    return;
+  }
+  const columns = await db.all(`PRAGMA table_info(${table})`);
+  const names = columns.map((row) => row.name);
+  if (!names.includes(column)) {
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
   }
 }
 
@@ -80,33 +156,33 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(hashBuffer, hashedBuffer);
 }
 
-function upsertWorker(id, name, active = 1) {
+async function upsertWorker(id, name, active = 1) {
   if (!id) return;
-  const existing = db.prepare('SELECT id FROM workers WHERE id = ?').get(id);
+  const existing = await db.get('SELECT id FROM workers WHERE id = ?', [id]);
   if (existing) {
-    db.prepare('UPDATE workers SET name = ?, active = ? WHERE id = ?').run(name, active, id);
+    await db.run('UPDATE workers SET name = ?, active = ? WHERE id = ?', [name, active, id]);
   } else {
-    db.prepare('INSERT INTO workers (id, name, active, created_at) VALUES (?, ?, ?, ?)')
-      .run(id, name, active, nowIso());
+    await db.run(
+      'INSERT INTO workers (id, name, active, created_at) VALUES (?, ?, ?, ?)',
+      [id, name, active, nowIso()]
+    );
   }
 }
 
-function syncWorkersWithUsers() {
-  const users = db.prepare('SELECT id, full_name, active FROM users').all();
-  users.forEach((user) => {
-    upsertWorker(user.id, user.full_name, user.active);
-  });
+async function syncWorkersWithUsers() {
+  const users = await db.all('SELECT id, full_name, active FROM users');
+  for (const user of users) {
+    await upsertWorker(user.id, user.full_name, user.active);
+  }
 }
 
-function createSession(userId) {
+async function createSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const createdAt = nowIso();
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-  db.prepare('INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(
-    token,
-    userId,
-    createdAt,
-    expiresAt
+  await db.run(
+    'INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
+    [token, userId, createdAt, expiresAt]
   );
   return token;
 }
@@ -117,32 +193,37 @@ function getToken(req) {
   return req.headers['x-auth-token'];
 }
 
-function requireAuth(req, res, next) {
-  const token = getToken(req);
-  if (!token) return res.status(401).json({ error: 'Nejste přihlášeni.' });
+async function requireAuth(req, res, next) {
+  try {
+    const token = getToken(req);
+    if (!token) return res.status(401).json({ error: 'Nejste přihlášeni.' });
 
-  const row = db.prepare(
-    `SELECT s.token, s.user_id, s.expires_at, u.username, u.full_name, u.role
-     FROM sessions s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.token = ? AND u.active = 1`
-  ).get(token);
+    const row = await db.get(
+      `SELECT s.token, s.user_id, s.expires_at, u.username, u.full_name, u.role
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token = ? AND u.active = 1`,
+      [token]
+    );
 
-  if (!row) return res.status(401).json({ error: 'Neplatné přihlášení.' });
+    if (!row) return res.status(401).json({ error: 'Neplatné přihlášení.' });
 
-  if (row.expires_at <= nowIso()) {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-    return res.status(401).json({ error: 'Platnost přihlášení vypršela.' });
+    if (row.expires_at <= nowIso()) {
+      await db.run('DELETE FROM sessions WHERE token = ?', [token]);
+      return res.status(401).json({ error: 'Platnost přihlášení vypršela.' });
+    }
+
+    req.user = {
+      id: row.user_id,
+      username: row.username,
+      full_name: row.full_name,
+      role: row.role
+    };
+    req.token = token;
+    return next();
+  } catch (err) {
+    return next(err);
   }
-
-  req.user = {
-    id: row.user_id,
-    username: row.username,
-    full_name: row.full_name,
-    role: row.role
-  };
-  req.token = token;
-  return next();
 }
 
 function requireRole(role) {
@@ -154,8 +235,8 @@ function requireRole(role) {
   };
 }
 
-function initDb() {
-  db.exec(`
+async function initDb() {
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS skin_types (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -250,67 +331,86 @@ function initDb() {
     );
   `);
 
-  ensureColumn('clients', 'cream', 'TEXT');
-  ensureColumn('visits', 'service_id', 'TEXT');
-  ensureColumn('visits', 'service_data', 'TEXT');
+  await ensureColumn('clients', 'cream', 'TEXT');
+  await ensureColumn('visits', 'service_id', 'TEXT');
+  await ensureColumn('visits', 'service_data', 'TEXT');
 }
 
-function seedDefaults() {
-  const skinCount = db.prepare('SELECT COUNT(*) as count FROM skin_types').get().count;
+async function seedDefaults() {
+  const skinRow = await db.get('SELECT COUNT(*) as count FROM skin_types');
+  const skinCount = toInt(skinRow?.count, 0);
   if (skinCount === 0) {
-    const insert = db.prepare('INSERT INTO skin_types (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)');
     const now = nowIso();
-    ['Normální', 'Suchá', 'Mastná', 'Smíšená', 'Citlivá'].forEach((name, index) => {
-      insert.run(newId(), name, index, now);
-    });
+    const items = ['Normální', 'Suchá', 'Mastná', 'Smíšená', 'Citlivá'];
+    for (const [index, name] of items.entries()) {
+      await db.run(
+        'INSERT INTO skin_types (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)',
+        [newId(), name, index, now]
+      );
+    }
   }
 
-  const serviceCount = db.prepare('SELECT COUNT(*) as count FROM services').get().count;
+  const serviceRow = await db.get('SELECT COUNT(*) as count FROM services');
+  const serviceCount = toInt(serviceRow?.count, 0);
   if (serviceCount === 0) {
-    const insert = db.prepare('INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)');
     const now = nowIso();
-    insert.run(newId(), 'Kosmetika', 'cosmetic', now);
-    ['Laminace', 'Prodloužení řas', 'Masáže', 'Depilace', 'EMS a lymfodrenáž', 'Líčení'].forEach((name) => {
-      insert.run(newId(), name, 'generic', now);
-    });
+    await db.run(
+      'INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)',
+      [newId(), 'Kosmetika', 'cosmetic', now]
+    );
+    const items = ['Laminace', 'Prodloužení řas', 'Masáže', 'Depilace', 'EMS a lymfodrenáž', 'Líčení'];
+    for (const name of items) {
+      await db.run(
+        'INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)',
+        [newId(), name, 'generic', now]
+      );
+    }
   }
 
-  const treatmentCount = db.prepare('SELECT COUNT(*) as count FROM treatments').get().count;
+  const treatmentRow = await db.get('SELECT COUNT(*) as count FROM treatments');
+  const treatmentCount = toInt(treatmentRow?.count, 0);
   if (treatmentCount === 0) {
-    const insert = db.prepare('INSERT INTO treatments (id, name, price, note, created_at) VALUES (?, ?, ?, ?, ?)');
     const now = nowIso();
-    insert.run(newId(), 'Čištění pleti', 900, 'Základní ošetření.', now);
-    insert.run(newId(), 'Hydratační rituál', 1200, 'Hydratace a masáž.', now);
+    await db.run(
+      'INSERT INTO treatments (id, name, price, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [newId(), 'Čištění pleti', 900, 'Základní ošetření.', now]
+    );
+    await db.run(
+      'INSERT INTO treatments (id, name, price, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [newId(), 'Hydratační rituál', 1200, 'Hydratace a masáž.', now]
+    );
   }
 
-  const addonCount = db.prepare('SELECT COUNT(*) as count FROM addons').get().count;
+  const addonRow = await db.get('SELECT COUNT(*) as count FROM addons');
+  const addonCount = toInt(addonRow?.count, 0);
   if (addonCount === 0) {
-    const insert = db.prepare('INSERT INTO addons (id, name, price, created_at) VALUES (?, ?, ?, ?)');
     const now = nowIso();
-    insert.run(newId(), 'Ampule', 150, now);
-    insert.run(newId(), 'Maska navíc', 200, now);
+    await db.run(
+      'INSERT INTO addons (id, name, price, created_at) VALUES (?, ?, ?, ?)',
+      [newId(), 'Ampule', 150, now]
+    );
+    await db.run(
+      'INSERT INTO addons (id, name, price, created_at) VALUES (?, ?, ?, ?)',
+      [newId(), 'Maska navíc', 200, now]
+    );
   }
 
-  const workerCount = db.prepare('SELECT COUNT(*) as count FROM workers').get().count;
+  const workerRow = await db.get('SELECT COUNT(*) as count FROM workers');
+  const workerCount = toInt(workerRow?.count, 0);
   if (workerCount === 0) {
-    const insert = db.prepare('INSERT INTO workers (id, name, created_at) VALUES (?, ?, ?)');
     const now = nowIso();
-    ['Majitelka', 'Uživatel', 'Recepční 1', 'Recepční 2', 'Recepční 3', 'Recepční 4', 'Recepční 5']
-      .forEach((name) => {
-        insert.run(newId(), name, now);
-      });
+    const items = ['Majitelka', 'Uživatel', 'Recepční 1', 'Recepční 2', 'Recepční 3', 'Recepční 4', 'Recepční 5'];
+    for (const name of items) {
+      await db.run('INSERT INTO workers (id, name, created_at) VALUES (?, ?, ?)', [newId(), name, now]);
+    }
   }
 }
-
-initDb();
-seedDefaults();
-syncWorkersWithUsers();
 
 const requireAdmin = requireRole('admin');
 
-function hasUsers() {
-  const count = db.prepare('SELECT COUNT(*) as count FROM users WHERE active = 1').get().count;
-  return count > 0;
+async function hasUsers() {
+  const row = await db.get('SELECT COUNT(*) as count FROM users WHERE active = 1');
+  return toInt(row?.count, 0) > 0;
 }
 
 function userView(row) {
@@ -322,19 +422,20 @@ function userView(row) {
   };
 }
 
-function otherAdminCount(excludeId) {
-  const row = db.prepare(
-    'SELECT COUNT(*) as count FROM users WHERE active = 1 AND role = ? AND id != ?'
-  ).get('admin', excludeId);
-  return row.count || 0;
+async function otherAdminCount(excludeId) {
+  const row = await db.get(
+    'SELECT COUNT(*) as count FROM users WHERE active = 1 AND role = ? AND id != ?',
+    ['admin', excludeId]
+  );
+  return toInt(row?.count, 0);
 }
 
-function getSettings() {
-  const skinTypes = db.prepare('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name').all();
-  const services = db.prepare('SELECT * FROM services WHERE active = 1 ORDER BY name').all();
-  const treatments = db.prepare('SELECT * FROM treatments WHERE active = 1 ORDER BY name').all();
-  const addons = db.prepare('SELECT * FROM addons WHERE active = 1 ORDER BY name').all();
-  const workers = db.prepare('SELECT id, full_name as name FROM users WHERE active = 1 ORDER BY full_name').all();
+async function getSettings() {
+  const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
+  const services = await db.all('SELECT * FROM services WHERE active = 1 ORDER BY name');
+  const treatments = await db.all('SELECT * FROM treatments WHERE active = 1 ORDER BY name');
+  const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
+  const workers = await db.all('SELECT id, full_name as name FROM users WHERE active = 1 ORDER BY full_name');
   return { skinTypes, services, treatments, addons, workers };
 }
 
@@ -342,12 +443,12 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/bootstrap', (req, res) => {
-  res.json({ has_users: hasUsers() });
+app.get('/api/bootstrap', async (req, res) => {
+  res.json({ has_users: await hasUsers() });
 });
 
-app.post('/api/setup', (req, res) => {
-  if (hasUsers()) return res.status(400).json({ error: 'Uživatel už existuje.' });
+app.post('/api/setup', async (req, res) => {
+  if (await hasUsers()) return res.status(400).json({ error: 'Uživatel už existuje.' });
 
   const payload = req.body || {};
   const username = normalizeUsername(payload.username);
@@ -360,15 +461,16 @@ app.post('/api/setup', (req, res) => {
 
   const id = newId();
   const now = nowIso();
-  db.prepare(
-    'INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, username, fullName, 'admin', hashPassword(password), now);
-  upsertWorker(id, fullName, 1);
+  await db.run(
+    'INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, username, fullName, 'admin', hashPassword(password), now]
+  );
+  await upsertWorker(id, fullName, 1);
 
   res.json({ ok: true });
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const payload = req.body || {};
   const username = normalizeUsername(payload.username);
   const password = (payload.password || '').trim();
@@ -376,20 +478,20 @@ app.post('/api/login', (req, res) => {
     return res.status(400).json({ error: 'Vyplňte uživatelské jméno a heslo.' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username);
+  const user = await db.get('SELECT * FROM users WHERE username = ? AND active = 1', [username]);
   if (!user || !verifyPassword(password, user.password_hash)) {
     return res.status(401).json({ error: 'Neplatné přihlašovací údaje.' });
   }
 
-  const token = createSession(user.id);
+  const token = await createSession(user.id);
   res.json({ token, user: userView(user) });
 });
 
 app.use('/api', requireAuth);
 
-app.post('/api/logout', (req, res) => {
+app.post('/api/logout', async (req, res) => {
   if (req.token) {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+    await db.run('DELETE FROM sessions WHERE token = ?', [req.token]);
   }
   res.json({ ok: true });
 });
@@ -398,46 +500,49 @@ app.get('/api/me', (req, res) => {
   res.json({ user: req.user });
 });
 
-app.get('/api/settings', (req, res) => {
-  res.json(getSettings());
+app.get('/api/settings', async (req, res) => {
+  res.json(await getSettings());
 });
 
-app.post('/api/services', requireAdmin, (req, res) => {
+app.post('/api/services', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   if (!name) return res.status(400).json({ error: 'name is required' });
 
   const id = newId();
-  db.prepare('INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)')
-    .run(id, name, formType, nowIso());
+  await db.run('INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)', [
+    id,
+    name,
+    formType,
+    nowIso()
+  ]);
   res.json({ id });
 });
 
-app.put('/api/services/:id', requireAdmin, (req, res) => {
+app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   if (!name) return res.status(400).json({ error: 'name is required' });
 
-  db.prepare('UPDATE services SET name = ?, form_type = ? WHERE id = ?')
-    .run(name, formType, req.params.id);
+  await db.run('UPDATE services SET name = ?, form_type = ? WHERE id = ?', [name, formType, req.params.id]);
   res.json({ ok: true });
 });
 
-app.delete('/api/services/:id', requireAdmin, (req, res) => {
-  db.prepare('UPDATE services SET active = 0 WHERE id = ?').run(req.params.id);
+app.delete('/api/services/:id', requireAdmin, async (req, res) => {
+  await db.run('UPDATE services SET active = 0 WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 });
 
-app.get('/api/users', requireAdmin, (req, res) => {
-  const users = db.prepare(
+app.get('/api/users', requireAdmin, async (req, res) => {
+  const users = await db.all(
     'SELECT id, username, full_name, role, active FROM users WHERE active = 1 ORDER BY full_name'
-  ).all();
+  );
   res.json(users);
 });
 
-app.post('/api/users', requireAdmin, (req, res) => {
+app.post('/api/users', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const username = normalizeUsername(payload.username);
   const fullName = (payload.full_name || '').trim();
@@ -451,20 +556,21 @@ app.post('/api/users', requireAdmin, (req, res) => {
   const id = newId();
   const now = nowIso();
   try {
-    db.prepare(
-      'INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).run(id, username, fullName, role, hashPassword(password), now);
+    await db.run(
+      'INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, username, fullName, role, hashPassword(password), now]
+    );
   } catch (err) {
     return res.status(400).json({ error: 'Uživatelské jméno už existuje.' });
   }
-  upsertWorker(id, fullName, 1);
+  await upsertWorker(id, fullName, 1);
 
   res.json({ id });
 });
 
-app.put('/api/users/:id', requireAdmin, (req, res) => {
+app.put('/api/users/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
-  const existing = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(req.params.id);
+  const existing = await db.get('SELECT * FROM users WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'Uživatel nenalezen.' });
 
   const username = normalizeUsername(payload.username) || existing.username;
@@ -482,94 +588,99 @@ app.put('/api/users/:id', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Jméno a uživatelské jméno jsou povinné.' });
   }
 
-  if (existing.role === 'admin' && role !== 'admin' && otherAdminCount(existing.id) === 0) {
+  if (existing.role === 'admin' && role !== 'admin' && (await otherAdminCount(existing.id)) === 0) {
     return res.status(400).json({ error: 'Musí zůstat alespoň jeden administrátor.' });
   }
 
   const passwordHash = password ? hashPassword(password) : existing.password_hash;
 
   try {
-    db.prepare(
-      'UPDATE users SET username = ?, full_name = ?, role = ?, password_hash = ? WHERE id = ?'
-    ).run(username, fullName, role, passwordHash, existing.id);
+    await db.run(
+      'UPDATE users SET username = ?, full_name = ?, role = ?, password_hash = ? WHERE id = ?',
+      [username, fullName, role, passwordHash, existing.id]
+    );
   } catch (err) {
     return res.status(400).json({ error: 'Uživatelské jméno už existuje.' });
   }
-  upsertWorker(existing.id, fullName, 1);
+  await upsertWorker(existing.id, fullName, 1);
 
   res.json({ ok: true });
 });
 
-app.delete('/api/users/:id', requireAdmin, (req, res) => {
-  const existing = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(req.params.id);
+app.delete('/api/users/:id', requireAdmin, async (req, res) => {
+  const existing = await db.get('SELECT * FROM users WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'Uživatel nenalezen.' });
 
-  if (existing.role === 'admin' && otherAdminCount(existing.id) === 0) {
+  if (existing.role === 'admin' && (await otherAdminCount(existing.id)) === 0) {
     return res.status(400).json({ error: 'Musí zůstat alespoň jeden administrátor.' });
   }
 
-  db.prepare('UPDATE users SET active = 0 WHERE id = ?').run(existing.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(existing.id);
-  upsertWorker(existing.id, existing.full_name, 0);
+  await db.run('UPDATE users SET active = 0 WHERE id = ?', [existing.id]);
+  await db.run('DELETE FROM sessions WHERE user_id = ?', [existing.id]);
+  await upsertWorker(existing.id, existing.full_name, 0);
   res.json({ ok: true });
 });
 
-app.get('/api/clients', (req, res) => {
+app.get('/api/clients', async (req, res) => {
   const search = (req.query.search || '').toString().trim();
   let rows;
   if (search) {
     const like = `%${search}%`;
-    rows = db.prepare(
+    rows = await db.all(
       `SELECT * FROM clients
        WHERE full_name LIKE ? OR phone LIKE ? OR email LIKE ?
        ORDER BY full_name`
-    ).all(like, like, like);
+      ,
+      [like, like, like]
+    );
   } else {
-    rows = db.prepare('SELECT * FROM clients ORDER BY full_name').all();
+    rows = await db.all('SELECT * FROM clients ORDER BY full_name');
   }
   res.json(rows);
 });
 
-app.get('/api/clients/:id', (req, res) => {
-  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+app.get('/api/clients/:id', async (req, res) => {
+  const client = await db.get('SELECT * FROM clients WHERE id = ?', [req.params.id]);
   if (!client) return res.status(404).json({ error: 'Client not found' });
   res.json(client);
 });
 
-app.post('/api/clients', (req, res) => {
+app.post('/api/clients', async (req, res) => {
   const payload = req.body || {};
   const fullName = (payload.full_name || '').trim();
   if (!fullName) return res.status(400).json({ error: 'full_name is required' });
 
   const id = newId();
   const now = nowIso();
-  db.prepare(
+  await db.run(
     `INSERT INTO clients (id, full_name, phone, email, skin_type_id, skin_notes, cream, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    fullName,
-    payload.phone || null,
-    payload.email || null,
-    payload.skin_type_id || null,
-    payload.skin_notes || null,
-    payload.cream || null,
-    now,
-    now
+    ,
+    [
+      id,
+      fullName,
+      payload.phone || null,
+      payload.email || null,
+      payload.skin_type_id || null,
+      payload.skin_notes || null,
+      payload.cream || null,
+      now,
+      now
+    ]
   );
 
   res.json({ id });
 });
 
-app.put('/api/clients/:id', (req, res) => {
+app.put('/api/clients/:id', async (req, res) => {
   const payload = req.body || {};
   const fullName = (payload.full_name || '').trim();
   if (!fullName) return res.status(400).json({ error: 'full_name is required' });
 
-  const exists = db.prepare('SELECT id FROM clients WHERE id = ?').get(req.params.id);
+  const exists = await db.get('SELECT id FROM clients WHERE id = ?', [req.params.id]);
   if (!exists) return res.status(404).json({ error: 'Client not found' });
 
-  db.prepare(
+  await db.run(
     `UPDATE clients SET
       full_name = ?,
       phone = ?,
@@ -579,27 +690,29 @@ app.put('/api/clients/:id', (req, res) => {
       cream = ?,
       updated_at = ?
      WHERE id = ?`
-  ).run(
-    fullName,
-    payload.phone || null,
-    payload.email || null,
-    payload.skin_type_id || null,
-    payload.skin_notes || null,
-    payload.cream || null,
-    nowIso(),
-    req.params.id
+    ,
+    [
+      fullName,
+      payload.phone || null,
+      payload.email || null,
+      payload.skin_type_id || null,
+      payload.skin_notes || null,
+      payload.cream || null,
+      nowIso(),
+      req.params.id
+    ]
   );
 
   res.json({ ok: true });
 });
 
-app.delete('/api/clients/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+app.delete('/api/clients/:id', async (req, res) => {
+  const info = await db.run('DELETE FROM clients WHERE id = ?', [req.params.id]);
   res.json({ ok: info.changes > 0 });
 });
 
-app.get('/api/clients/:id/visits', (req, res) => {
-  const rows = db.prepare(
+app.get('/api/clients/:id/visits', async (req, res) => {
+  const rows = await db.all(
     `SELECT v.*, c.full_name as client_name, t.name as treatment_name,
             COALESCE(u.full_name, w.name) as worker_name,
             s.name as service_name, s.form_type as service_form_type
@@ -611,27 +724,29 @@ app.get('/api/clients/:id/visits', (req, res) => {
      LEFT JOIN workers w ON v.worker_id = w.id
      WHERE v.client_id = ?
      ORDER BY v.date DESC, v.created_at DESC`
-  ).all(req.params.id);
+    ,
+    [req.params.id]
+  );
   res.json(rows);
 });
 
-app.post('/api/clients/:id/visits', (req, res) => {
+app.post('/api/clients/:id/visits', async (req, res) => {
   const payload = req.body || {};
   const clientId = req.params.id;
 
-  const client = db.prepare('SELECT id FROM clients WHERE id = ?').get(clientId);
+  const client = await db.get('SELECT id FROM clients WHERE id = ?', [clientId]);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const service = payload.service_id
-    ? db.prepare('SELECT id, name, form_type FROM services WHERE id = ? AND active = 1').get(payload.service_id)
+    ? await db.get('SELECT id, name, form_type FROM services WHERE id = ? AND active = 1', [payload.service_id])
     : null;
   if (!service) return res.status(400).json({ error: 'Service is required' });
 
   const workerId = payload.worker_id || null;
   if (!workerId) return res.status(400).json({ error: 'worker_id is required' });
-  const worker = db.prepare('SELECT id, full_name FROM users WHERE id = ? AND active = 1').get(workerId);
+  const worker = await db.get('SELECT id, full_name FROM users WHERE id = ? AND active = 1', [workerId]);
   if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
-  upsertWorker(worker.id, worker.full_name, 1);
+  await upsertWorker(worker.id, worker.full_name, 1);
 
   const manualTotal = payload.manual_total !== null && payload.manual_total !== undefined && payload.manual_total !== ''
     ? toInt(payload.manual_total, 0)
@@ -645,12 +760,15 @@ app.post('/api/clients/:id/visits', (req, res) => {
 
   if (service.form_type === 'cosmetic') {
     treatment = payload.treatment_id
-      ? db.prepare('SELECT id, name, price FROM treatments WHERE id = ?').get(payload.treatment_id)
+      ? await db.get('SELECT id, name, price FROM treatments WHERE id = ?', [payload.treatment_id])
       : null;
 
     const addons = Array.isArray(payload.addons) ? payload.addons : [];
     addonRows = addons.length
-      ? db.prepare(`SELECT id, name, price FROM addons WHERE id IN (${addons.map(() => '?').join(',')})`).all(...addons)
+      ? await db.all(
+        `SELECT id, name, price FROM addons WHERE id IN (${addons.map(() => '?').join(',')})`,
+        addons
+      )
       : [];
 
     addonsTotal = addonRows.reduce((sum, item) => sum + toInt(item.price, 0), 0);
@@ -665,39 +783,41 @@ app.post('/api/clients/:id/visits', (req, res) => {
 
   const id = newId();
   const serviceData = payload.service_data ? JSON.stringify(payload.service_data) : null;
-  db.prepare(
+  await db.run(
     `INSERT INTO visits (
       id, client_id, date, service_id, treatment_id, treatment_price,
       addons_json, addons_total, manual_total, total, service_data, note,
       worker_id, payment_method, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    id,
-    clientId,
-    toDateOnly(payload.date),
-    service.id,
-    treatment ? treatment.id : null,
-    treatmentPrice,
-    addonRows.length ? JSON.stringify(addonRows) : null,
-    addonsTotal,
-    manualTotal,
-    total,
-    serviceData,
-    payload.note || null,
-    workerId,
-    payload.payment_method || 'cash',
-    nowIso()
+    ,
+    [
+      id,
+      clientId,
+      toDateOnly(payload.date),
+      service.id,
+      treatment ? treatment.id : null,
+      treatmentPrice,
+      addonRows.length ? JSON.stringify(addonRows) : null,
+      addonsTotal,
+      manualTotal,
+      total,
+      serviceData,
+      payload.note || null,
+      workerId,
+      payload.payment_method || 'cash',
+      nowIso()
+    ]
   );
 
   res.json({ id });
 });
 
-app.delete('/api/visits/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM visits WHERE id = ?').run(req.params.id);
+app.delete('/api/visits/:id', async (req, res) => {
+  const info = await db.run('DELETE FROM visits WHERE id = ?', [req.params.id]);
   res.json({ ok: info.changes > 0 });
 });
 
-app.post('/api/expenses', requireAdmin, (req, res) => {
+app.post('/api/expenses', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const title = (payload.title || '').trim();
   if (!title) return res.status(400).json({ error: 'title is required' });
@@ -706,27 +826,31 @@ app.post('/api/expenses', requireAdmin, (req, res) => {
   if (!amount) return res.status(400).json({ error: 'amount is required' });
 
   const id = newId();
-  db.prepare(
+  await db.run(
     `INSERT INTO expenses (id, date, title, amount, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, toDateOnly(payload.date), title, amount, payload.note || null, nowIso());
+    ,
+    [id, toDateOnly(payload.date), title, amount, payload.note || null, nowIso()]
+  );
 
   res.json({ id });
 });
 
-app.get('/api/expenses', requireAdmin, (req, res) => {
+app.get('/api/expenses', requireAdmin, async (req, res) => {
   const from = toDateOnly(req.query.from || null);
   const to = toDateOnly(req.query.to || null);
-  const rows = db.prepare(
+  const rows = await db.all(
     `SELECT * FROM expenses
      WHERE date BETWEEN ? AND ?
      ORDER BY date DESC, created_at DESC`
-  ).all(from, to);
+    ,
+    [from, to]
+  );
   res.json(rows);
 });
 
-app.delete('/api/expenses/:id', requireAdmin, (req, res) => {
-  const info = db.prepare('DELETE FROM expenses WHERE id = ?').run(req.params.id);
+app.delete('/api/expenses/:id', requireAdmin, async (req, res) => {
+  const info = await db.run('DELETE FROM expenses WHERE id = ?', [req.params.id]);
   res.json({ ok: info.changes > 0 });
 });
 
@@ -743,10 +867,10 @@ function economyRange(req) {
   return { from: from || fromAuto, to: to || toAuto };
 }
 
-app.get('/api/economy', requireAdmin, (req, res) => {
+app.get('/api/economy', requireAdmin, async (req, res) => {
   const range = economyRange(req);
 
-  const visits = db.prepare(
+  const visits = await db.all(
     `SELECT v.*, c.full_name as client_name, t.name as treatment_name,
             COALESCE(u.full_name, w.name) as worker_name,
             s.name as service_name
@@ -758,18 +882,22 @@ app.get('/api/economy', requireAdmin, (req, res) => {
      LEFT JOIN workers w ON v.worker_id = w.id
      WHERE v.date BETWEEN ? AND ?
      ORDER BY v.date DESC, v.created_at DESC`
-  ).all(range.from, range.to);
+    ,
+    [range.from, range.to]
+  );
 
-  const expenses = db.prepare(
+  const expenses = await db.all(
     `SELECT * FROM expenses
      WHERE date BETWEEN ? AND ?
      ORDER BY date DESC, created_at DESC`
-  ).all(range.from, range.to);
+    ,
+    [range.from, range.to]
+  );
 
   const incomeTotal = visits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const expenseTotal = expenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
 
-  const byWorker = db.prepare(
+  const byWorker = await db.all(
     `SELECT COALESCE(u.id, w.id) as worker_id,
             COALESCE(u.full_name, w.name) as worker_name,
             SUM(v.total) as total
@@ -779,7 +907,9 @@ app.get('/api/economy', requireAdmin, (req, res) => {
      WHERE v.date BETWEEN ? AND ?
      GROUP BY COALESCE(u.id, w.id)
      ORDER BY total DESC`
-  ).all(range.from, range.to);
+    ,
+    [range.from, range.to]
+  );
 
   res.json({
     range,
@@ -794,10 +924,13 @@ app.get('/api/economy', requireAdmin, (req, res) => {
   });
 });
 
-app.get('/api/summary', (req, res) => {
-  const clientsCount = db.prepare('SELECT COUNT(*) as count FROM clients').get().count;
-  const visitsCount = db.prepare('SELECT COUNT(*) as count FROM visits').get().count;
-  const expensesCount = db.prepare('SELECT COUNT(*) as count FROM expenses').get().count;
+app.get('/api/summary', async (req, res) => {
+  const clientsRow = await db.get('SELECT COUNT(*) as count FROM clients');
+  const visitsRow = await db.get('SELECT COUNT(*) as count FROM visits');
+  const expensesRow = await db.get('SELECT COUNT(*) as count FROM expenses');
+  const clientsCount = toInt(clientsRow?.count, 0);
+  const visitsCount = toInt(visitsRow?.count, 0);
+  const expensesCount = toInt(expensesRow?.count, 0);
 
   const range = economyRange(req);
   if (req.user?.role === 'reception') {
@@ -824,14 +957,14 @@ app.get('/api/summary', (req, res) => {
     return;
   }
 
-  const visitsAll = db.prepare('SELECT total FROM visits').all();
-  const expensesAll = db.prepare('SELECT amount FROM expenses').all();
+  const visitsAll = await db.all('SELECT total FROM visits');
+  const expensesAll = await db.all('SELECT amount FROM expenses');
 
   const totalIncome = visitsAll.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const totalExpenses = expensesAll.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
 
-  const visitsMonth = db.prepare('SELECT total FROM visits WHERE date BETWEEN ? AND ?').all(range.from, range.to);
-  const expensesMonth = db.prepare('SELECT amount FROM expenses WHERE date BETWEEN ? AND ?').all(range.from, range.to);
+  const visitsMonth = await db.all('SELECT total FROM visits WHERE date BETWEEN ? AND ?', [range.from, range.to]);
+  const expensesMonth = await db.all('SELECT amount FROM expenses WHERE date BETWEEN ? AND ?', [range.from, range.to]);
 
   const incomeMonth = visitsMonth.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const expensesMonthTotal = expensesMonth.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
@@ -854,17 +987,17 @@ app.get('/api/summary', (req, res) => {
   });
 });
 
-app.get('/api/backup', requireAdmin, (req, res) => {
+app.get('/api/backup', requireAdmin, async (req, res) => {
   const data = {
-    skin_types: db.prepare('SELECT * FROM skin_types').all(),
-    services: db.prepare('SELECT * FROM services').all(),
-    treatments: db.prepare('SELECT * FROM treatments').all(),
-    addons: db.prepare('SELECT * FROM addons').all(),
-    workers: db.prepare('SELECT * FROM workers').all(),
-    users: db.prepare('SELECT * FROM users').all(),
-    clients: db.prepare('SELECT * FROM clients').all(),
-    visits: db.prepare('SELECT * FROM visits').all(),
-    expenses: db.prepare('SELECT * FROM expenses').all()
+    skin_types: await db.all('SELECT * FROM skin_types'),
+    services: await db.all('SELECT * FROM services'),
+    treatments: await db.all('SELECT * FROM treatments'),
+    addons: await db.all('SELECT * FROM addons'),
+    workers: await db.all('SELECT * FROM workers'),
+    users: await db.all('SELECT * FROM users'),
+    clients: await db.all('SELECT * FROM clients'),
+    visits: await db.all('SELECT * FROM visits'),
+    expenses: await db.all('SELECT * FROM expenses')
   };
 
   res.json({
@@ -873,54 +1006,44 @@ app.get('/api/backup', requireAdmin, (req, res) => {
   });
 });
 
-app.post('/api/restore', requireAdmin, (req, res) => {
+app.post('/api/restore', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   if (!payload.data) return res.status(400).json({ error: 'Missing data' });
 
   const { data } = payload;
-  const tables = ['skin_types', 'services', 'treatments', 'addons', 'workers', 'users', 'clients', 'visits', 'expenses'];
+  const deleteOrder = ['visits', 'clients', 'users', 'workers', 'addons', 'treatments', 'services', 'skin_types', 'expenses'];
+  const insertOrder = ['skin_types', 'services', 'treatments', 'addons', 'workers', 'users', 'clients', 'visits', 'expenses'];
 
-  const insertMany = (table, rows) => {
+  const insertMany = async (table, rows) => {
     if (!Array.isArray(rows) || rows.length === 0) return;
     const columns = Object.keys(rows[0]);
     const placeholders = columns.map(() => '?').join(',');
-    const stmt = db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders})`);
-    const insert = db.transaction(() => {
-      rows.forEach((row) => {
-        const values = columns.map((col) => row[col]);
-        stmt.run(values);
-      });
-    });
-    insert();
+    for (const row of rows) {
+      const values = columns.map((col) => row[col]);
+      await db.run(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${placeholders})`, values);
+    }
   };
 
-  const restore = db.transaction(() => {
-    db.pragma('foreign_keys = OFF');
-    tables.forEach((table) => db.prepare(`DELETE FROM ${table}`).run());
-    insertMany('skin_types', data.skin_types || []);
-    insertMany('services', data.services || []);
-    insertMany('treatments', data.treatments || []);
-    insertMany('addons', data.addons || []);
-    insertMany('workers', data.workers || []);
-    insertMany('users', data.users || []);
-    insertMany('clients', data.clients || []);
-    insertMany('visits', data.visits || []);
-    insertMany('expenses', data.expenses || []);
-    db.prepare('DELETE FROM sessions').run();
-    db.pragma('foreign_keys = ON');
-  });
-
   try {
-    restore();
-    syncWorkersWithUsers();
+    await db.exec('BEGIN');
+    for (const table of deleteOrder) {
+      await db.run(`DELETE FROM ${table}`);
+    }
+    await db.run('DELETE FROM sessions');
+    for (const table of insertOrder) {
+      await insertMany(table, data[table] || []);
+    }
+    await db.exec('COMMIT');
+    await syncWorkersWithUsers();
     res.json({ ok: true });
   } catch (err) {
+    await db.exec('ROLLBACK');
     res.status(500).json({ error: 'Restore failed', detail: err.message });
   }
 });
 
 function createSimpleSettingRoutes(resource, table) {
-  app.post(`/api/${resource}`, requireAdmin, (req, res) => {
+  app.post(`/api/${resource}`, requireAdmin, async (req, res) => {
     const payload = req.body || {};
     const name = (payload.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -931,20 +1054,28 @@ function createSimpleSettingRoutes(resource, table) {
     const note = payload.note || null;
 
     if (table === 'treatments') {
-      db.prepare('INSERT INTO treatments (id, name, price, note, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(id, name, price, note, now);
+      await db.run('INSERT INTO treatments (id, name, price, note, created_at) VALUES (?, ?, ?, ?, ?)', [
+        id,
+        name,
+        price,
+        note,
+        now
+      ]);
     } else if (table === 'addons') {
-      db.prepare('INSERT INTO addons (id, name, price, created_at) VALUES (?, ?, ?, ?)')
-        .run(id, name, price, now);
+      await db.run('INSERT INTO addons (id, name, price, created_at) VALUES (?, ?, ?, ?)', [
+        id,
+        name,
+        price,
+        now
+      ]);
     } else {
-      db.prepare(`INSERT INTO ${table} (id, name, created_at) VALUES (?, ?, ?)`)
-        .run(id, name, now);
+      await db.run(`INSERT INTO ${table} (id, name, created_at) VALUES (?, ?, ?)`, [id, name, now]);
     }
 
     res.json({ id });
   });
 
-  app.put(`/api/${resource}/:id`, requireAdmin, (req, res) => {
+  app.put(`/api/${resource}/:id`, requireAdmin, async (req, res) => {
     const payload = req.body || {};
     const name = (payload.name || '').trim();
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -953,21 +1084,23 @@ function createSimpleSettingRoutes(resource, table) {
     const note = payload.note || null;
 
     if (table === 'treatments') {
-      db.prepare('UPDATE treatments SET name = ?, price = ?, note = ? WHERE id = ?')
-        .run(name, price, note, req.params.id);
+      await db.run('UPDATE treatments SET name = ?, price = ?, note = ? WHERE id = ?', [
+        name,
+        price,
+        note,
+        req.params.id
+      ]);
     } else if (table === 'addons') {
-      db.prepare('UPDATE addons SET name = ?, price = ? WHERE id = ?')
-        .run(name, price, req.params.id);
+      await db.run('UPDATE addons SET name = ?, price = ? WHERE id = ?', [name, price, req.params.id]);
     } else {
-      db.prepare(`UPDATE ${table} SET name = ? WHERE id = ?`)
-        .run(name, req.params.id);
+      await db.run(`UPDATE ${table} SET name = ? WHERE id = ?`, [name, req.params.id]);
     }
 
     res.json({ ok: true });
   });
 
-  app.delete(`/api/${resource}/:id`, requireAdmin, (req, res) => {
-    db.prepare(`UPDATE ${table} SET active = 0 WHERE id = ?`).run(req.params.id);
+  app.delete(`/api/${resource}/:id`, requireAdmin, async (req, res) => {
+    await db.run(`UPDATE ${table} SET active = 0 WHERE id = ?`, [req.params.id]);
     res.json({ ok: true });
   });
 }
@@ -982,6 +1115,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Interní chyba serveru.', detail: err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`Kartoteka running on http://localhost:${PORT}`);
+async function startServer() {
+  await initDb();
+  await seedDefaults();
+  await syncWorkersWithUsers();
+  app.listen(PORT, () => {
+    console.log(`Kartoteka running on http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
