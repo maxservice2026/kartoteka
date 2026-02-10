@@ -1,11 +1,11 @@
 :root {
   color-scheme: light;
-  --bg: #f6f3ee;
+  --bg: #fff4e6;
   --panel: #ffffff;
   --ink: #1f1f1f;
   --muted: #6c6c6c;
-  --accent: #1459ff;
-  --accent-2: #f4722b;
+  --accent: #f4722b;
+  --accent-2: #1453ff;
   --border: #e6e2db;
   --shadow: 0 24px 50px rgba(31, 31, 31, 0.12);
   --radius: 18px;
@@ -19,9 +19,9 @@ body {
   margin: 0;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   color: var(--ink);
-  background: radial-gradient(circle at 10% 10%, #fff6e9, transparent 40%),
-    radial-gradient(circle at 90% 10%, #edf2ff, transparent 45%),
-    linear-gradient(135deg, #f7f4ef, #f2f0ea);
+  background: radial-gradient(circle at 10% 10%, #dbe7ff, transparent 40%),
+    radial-gradient(circle at 90% 10%, #c6d8ff, transparent 45%),
+    linear-gradient(135deg, #e9f1ff, #c6d8ff);
   min-height: 100vh;
 }
 
@@ -29,13 +29,11 @@ body::after {
   content: "";
   position: fixed;
   inset: 0;
-  background-image: repeating-linear-gradient(
-    45deg,
-    rgba(20, 89, 255, 0.06) 0,
-    rgba(20, 89, 255, 0.06) 2px,
-    transparent 2px,
-    transparent 16px
-  );
+  background-image: repeating-linear-gradient(45deg,
+      rgba(20, 83, 255, 0.08) 0,
+      rgba(20, 83, 255, 0.08) 2px,
+      transparent 2px,
+      transparent 16px);
   opacity: 0.2;
   pointer-events: none;
 }
@@ -187,6 +185,7 @@ button.primary:hover {
     opacity: 0;
     transform: translateY(6px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
