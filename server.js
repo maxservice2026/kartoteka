@@ -837,12 +837,10 @@ app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
   if (!amount) return res.status(400).json({ error: 'amount is required' });
 
   const vatRate = Math.max(0, toInt(payload.vat_rate, 0));
-  const workerId = req.user.role === 'admin' ? (payload.worker_id || null) : req.user.id;
-  if (workerId) {
-    const worker = await db.get('SELECT id, full_name FROM users WHERE id = ? AND active = 1', [workerId]);
-    if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
-    await upsertWorker(worker.id, worker.full_name, 1);
-  }
+  const workerId = req.user.id;
+  const worker = await db.get('SELECT id, full_name FROM users WHERE id = ? AND active = 1', [workerId]);
+  if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
+  await upsertWorker(worker.id, worker.full_name, 1);
 
   const id = newId();
   await db.run(
@@ -858,13 +856,11 @@ app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
 app.get('/api/expenses', requireEconomyAccess, async (req, res) => {
   const from = toDateOnly(req.query.from || null);
   const to = toDateOnly(req.query.to || null);
-  const workerFilter = req.user.role === 'worker' ? req.user.id : (req.query.worker_id || null);
+  const workerFilter = req.user.id;
   const where = ['e.date BETWEEN ? AND ?'];
   const params = [from, to];
-  if (workerFilter) {
-    where.push('e.worker_id = ?');
-    params.push(workerFilter);
-  }
+  where.push('e.worker_id = ?');
+  params.push(workerFilter);
   const rows = await db.all(
     `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
      FROM expenses e
@@ -909,8 +905,34 @@ function economyRange(req) {
 app.get('/api/economy', requireEconomyAccess, async (req, res) => {
   const range = economyRange(req);
   const role = req.user.role;
-  const workerFilter = role === 'worker' ? req.user.id : (req.query.worker_id || null);
   const serviceFilter = req.query.service_id || null;
+  const workerFilter = role === 'worker' ? req.user.id : (req.query.worker_id || null);
+  const myWorkerId = req.user.id;
+
+  const myVisitsWhere = ['v.date BETWEEN ? AND ?', 'v.worker_id = ?'];
+  const myVisitsParams = [range.from, range.to, myWorkerId];
+  if (serviceFilter) {
+    myVisitsWhere.push('v.service_id = ?');
+    myVisitsParams.push(serviceFilter);
+  }
+  const myVisits = await db.all(
+    `SELECT v.total
+     FROM visits v
+     WHERE ${myVisitsWhere.join(' AND ')}`,
+    myVisitsParams
+  );
+
+  const myExpensesWhere = ['e.date BETWEEN ? AND ?', 'e.worker_id = ?'];
+  const myExpensesParams = [range.from, range.to, myWorkerId];
+  const myExpenses = await db.all(
+    `SELECT e.amount
+     FROM expenses e
+     WHERE ${myExpensesWhere.join(' AND ')}`,
+    myExpensesParams
+  );
+
+  const incomeTotal = myVisits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
+  const expenseTotal = myExpenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
 
   const visitsWhere = ['v.date BETWEEN ? AND ?'];
   const visitsParams = [range.from, range.to];
@@ -939,26 +961,16 @@ app.get('/api/economy', requireEconomyAccess, async (req, res) => {
     visitsParams
   );
 
-  const expensesWhere = ['e.date BETWEEN ? AND ?'];
-  const expensesParams = [range.from, range.to];
-  if (workerFilter) {
-    expensesWhere.push('e.worker_id = ?');
-    expensesParams.push(workerFilter);
-  }
-
   const expenses = await db.all(
     `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
      FROM expenses e
      LEFT JOIN users u ON e.worker_id = u.id
      LEFT JOIN workers w ON e.worker_id = w.id
-     WHERE ${expensesWhere.join(' AND ')}
+     WHERE e.date BETWEEN ? AND ? AND e.worker_id = ?
      ORDER BY e.date DESC, e.created_at DESC`
     ,
-    expensesParams
+    [range.from, range.to, myWorkerId]
   );
-
-  const incomeTotal = visits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
-  const expenseTotal = expenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
 
   let byWorker = [];
   if (role === 'admin') {
@@ -987,23 +999,19 @@ app.get('/api/economy', requireEconomyAccess, async (req, res) => {
     );
   }
 
-  let totalsAll = null;
+  let totalsAllIncome = null;
   if (role === 'admin') {
+    const allWhere = ['date BETWEEN ? AND ?'];
+    const allParams = [range.from, range.to];
+    if (serviceFilter) {
+      allWhere.push('service_id = ?');
+      allParams.push(serviceFilter);
+    }
     const visitsAll = await db.all(
-      `SELECT total FROM visits WHERE date BETWEEN ? AND ?`,
-      [range.from, range.to]
+      `SELECT total FROM visits WHERE ${allWhere.join(' AND ')}`,
+      allParams
     );
-    const expensesAll = await db.all(
-      `SELECT amount FROM expenses WHERE date BETWEEN ? AND ?`,
-      [range.from, range.to]
-    );
-    const incomeAll = visitsAll.reduce((sum, row) => sum + toInt(row.total, 0), 0);
-    const expenseAll = expensesAll.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
-    totalsAll = {
-      income: incomeAll,
-      expenses: expenseAll,
-      profit: incomeAll - expenseAll
-    };
+    totalsAllIncome = visitsAll.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   }
 
   res.json({
@@ -1013,7 +1021,7 @@ app.get('/api/economy', requireEconomyAccess, async (req, res) => {
       expenses: expenseTotal,
       profit: incomeTotal - expenseTotal
     },
-    totals_all: totalsAll,
+    totals_all_income: totalsAllIncome,
     visits,
     expenses,
     by_worker: byWorker

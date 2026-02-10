@@ -872,9 +872,6 @@ async function openEconomyModal() {
   const workerOptions = '<option value="">Všichni pracovníci</option>' + state.settings.workers
     .map((worker) => `<option value="${worker.id}">${worker.name}</option>`)
     .join('');
-  const expenseWorkerOptions = '<option value="">Bez pracovníka</option>' + state.settings.workers
-    .map((worker) => `<option value="${worker.id}">${worker.name}</option>`)
-    .join('');
   openModal(`
     <div class="modal-header">
       <div>
@@ -884,6 +881,14 @@ async function openEconomyModal() {
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
+      <div id="ecoSummary"></div>
+      <div class="actions-row quick-ranges" id="ecoQuickRanges">
+        <button class="ghost" data-range="month">Tento měsíc</button>
+        <button class="ghost" data-range="prev-month">Minulý měsíc</button>
+        <button class="ghost" data-range="quarter">Aktuální kvartál</button>
+        <button class="ghost" data-range="year">Aktuální rok</button>
+        <button class="ghost" data-range="prev-year">Minulý rok</button>
+      </div>
       <div class="field-row">
         <div class="field">
           <label>Od</label>
@@ -909,7 +914,6 @@ async function openEconomyModal() {
       <div class="actions-row">
         <button class="ghost" id="ecoFilter">Filtrovat</button>
       </div>
-      <div id="ecoSummary"></div>
       <div class="settings-section">
         <h3>Přidat výdaj</h3>
         <div class="field-row">
@@ -927,12 +931,6 @@ async function openEconomyModal() {
             <label>DPH (%)</label>
             <input type="number" id="expenseVat" min="0" step="1" value="0" />
           </div>
-          ${isAdmin
-            ? `<div class="field">
-                <label>Pracovník</label>
-                <select id="expenseWorker">${expenseWorkerOptions}</select>
-              </div>`
-            : ''}
         </div>
         <div class="field-row">
           <div class="field">
@@ -968,6 +966,37 @@ async function openEconomyModal() {
   const closeBtn = document.getElementById('closeModal');
   closeBtn.addEventListener('click', closeModal);
 
+  function setRange(kind) {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    let start;
+    let end;
+
+    if (kind === 'month') {
+      start = new Date(year, month, 1);
+      end = new Date(year, month + 1, 0);
+    } else if (kind === 'prev-month') {
+      start = new Date(year, month - 1, 1);
+      end = new Date(year, month, 0);
+    } else if (kind === 'quarter') {
+      const quarterStart = Math.floor(month / 3) * 3;
+      start = new Date(year, quarterStart, 1);
+      end = new Date(year, quarterStart + 3, 0);
+    } else if (kind === 'year') {
+      start = new Date(year, 0, 1);
+      end = new Date(year, 11, 31);
+    } else if (kind === 'prev-year') {
+      start = new Date(year - 1, 0, 1);
+      end = new Date(year - 1, 11, 31);
+    } else {
+      return;
+    }
+
+    document.getElementById('ecoFrom').value = toLocalDateString(start);
+    document.getElementById('ecoTo').value = toLocalDateString(end);
+  }
+
   async function loadEconomy() {
     const from = document.getElementById('ecoFrom').value;
     const to = document.getElementById('ecoTo').value;
@@ -980,17 +1009,17 @@ async function openEconomyModal() {
     const summary = document.getElementById('ecoSummary');
     let summaryHtml = `
       <div class="stats">
-        <div>Tržba (filtr): <strong>${formatCzk(data.totals.income)}</strong></div>
-        <div>Výdaje (filtr): <strong>${formatCzk(data.totals.expenses)}</strong></div>
-        <div>Zisk (filtr): <strong>${formatCzk(data.totals.profit)}</strong></div>
+        <div><strong>Moje ekonomika</strong></div>
+        <div>Tržba: <strong class="stat-income">${formatCzk(data.totals.income)}</strong></div>
+        <div>Výdaje: <strong class="stat-expenses">${formatCzk(data.totals.expenses)}</strong></div>
+        <div>Zisk: <strong class="stat-profit">${formatCzk(data.totals.profit)}</strong></div>
       </div>
     `;
-    if (data.totals_all) {
+    if (data.totals_all_income) {
       summaryHtml += `
         <div class="stats">
-          <div>Tržba (celkem): <strong>${formatCzk(data.totals_all.income)}</strong></div>
-          <div>Výdaje (celkem): <strong>${formatCzk(data.totals_all.expenses)}</strong></div>
-          <div>Zisk (celkem): <strong>${formatCzk(data.totals_all.profit)}</strong></div>
+          <div><strong>Celkové příjmy (všichni)</strong></div>
+          <div>Tržba: <strong class="stat-income">${formatCzk(data.totals_all_income)}</strong></div>
         </div>
       `;
     }
@@ -1042,6 +1071,12 @@ async function openEconomyModal() {
   }
 
   document.getElementById('ecoFilter').addEventListener('click', loadEconomy);
+  document.querySelectorAll('#ecoQuickRanges button[data-range]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      setRange(button.dataset.range);
+      await loadEconomy();
+    });
+  });
   document.getElementById('expenseSave').addEventListener('click', async () => {
     const title = document.getElementById('expenseTitle').value.trim();
     const amount = document.getElementById('expenseAmount').value;
@@ -1050,12 +1085,10 @@ async function openEconomyModal() {
       return;
     }
     const vatRate = document.getElementById('expenseVat').value || '0';
-    const workerId = isAdmin ? document.getElementById('expenseWorker')?.value : '';
     await api.post('/api/expenses', {
       title,
       amount,
       vat_rate: vatRate,
-      worker_id: workerId || null,
       date: document.getElementById('expenseDate').value,
       note: document.getElementById('expenseNote').value.trim()
     });
@@ -1071,36 +1104,16 @@ async function openEconomyModal() {
 }
 
 async function openInvoiceModal() {
-  const range = monthRange();
-  const params = new URLSearchParams({ from: range.from, to: range.to });
-  const data = await api.get(`/api/economy?${params.toString()}`);
-  const name = state.auth.user?.full_name || 'Pracovník';
-  const income = formatCzk(data.totals?.income || 0);
-  const expenses = formatCzk(data.totals?.expenses || 0);
-  const profit = formatCzk(data.totals?.profit || 0);
-
-  const text = [
-    `Faktura (náhled)`,
-    `Vystavil: ${name}`,
-    `Období: ${range.from} – ${range.to}`,
-    '',
-    `Tržby: ${income}`,
-    `Náklady: ${expenses}`,
-    `Zisk: ${profit}`,
-    '',
-    `Poznámka: Tento text může být nahrazen automaticky generovanou fakturou.`
-  ].join('\n');
-
   openModal(`
     <div class="modal-header">
       <div>
         <h2>Faktura</h2>
-        <div class="meta">Náhled textu faktury podle tržeb.</div>
+        <div class="meta">Náhled textu faktury.</div>
       </div>
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
-      <textarea rows="12" readonly>${text}</textarea>
+      <textarea rows="6" readonly>Zde může být automaticky vygenerovaná faktura na základě zvolených procent o spolupráci.</textarea>
     </div>
   `);
 

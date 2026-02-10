@@ -363,6 +363,27 @@ button.primary:hover {
   justify-content: flex-end;
 }
 
+.quick-ranges {
+  justify-content: flex-start;
+}
+
+.quick-ranges button {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.stats .stat-income {
+  color: #1f9a4c;
+}
+
+.stats .stat-expenses {
+  color: #d0422b;
+}
+
+.stats .stat-profit {
+  color: #2563eb;
+}
+
 .history {
   margin-top: 18px;
 }
