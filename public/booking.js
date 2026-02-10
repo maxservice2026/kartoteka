@@ -14,7 +14,8 @@ const dom = {
 const state = {
   services: [],
   selectedSlot: null,
-  duration: 30
+  duration: 30,
+  blockedStarts: new Set()
 };
 
 function todayLocal() {
@@ -110,6 +111,9 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
         cell.classList.add('is-selected');
       }
     }
+    if (state.blockedStarts.has(`${workerId}:${startTime}`)) {
+      ok = false;
+    }
     document.querySelectorAll('.slot-button.is-selected').forEach((cell) => {
       cell.classList.add(ok ? 'is-valid' : 'is-invalid');
     });
@@ -165,6 +169,9 @@ async function loadSlots() {
   const response = await fetch(`/api/public/availability?date=${encodeURIComponent(date)}&service_id=${serviceId}`);
   const data = await response.json();
   state.duration = Number(data.duration) || 30;
+  state.blockedStarts = new Set(
+    (data.blocked_starts || []).map((item) => `${item.worker_id}:${item.time_slot}`)
+  );
   renderSlots(data.base_slots || [], data.slots || []);
   if (state.selectedSlot) {
     const selectedButton = document.querySelector(
