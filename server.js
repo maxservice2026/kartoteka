@@ -992,7 +992,7 @@ app.get('/api/economy', requireEconomyAccess, async (req, res) => {
        LEFT JOIN users u ON v.worker_id = u.id
        LEFT JOIN workers w ON v.worker_id = w.id
        WHERE ${byWorkerWhere.join(' AND ')}
-       GROUP BY COALESCE(u.id, w.id)
+       GROUP BY COALESCE(u.id, w.id), COALESCE(u.full_name, w.name)
        ORDER BY total DESC`
       ,
       byWorkerParams
