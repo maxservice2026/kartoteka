@@ -1459,7 +1459,7 @@ async function openServiceDetailModal(serviceId) {
     }
     await api.put(`/api/services/${service.id}`, payload);
     await loadSettings();
-    await openServiceDetailModal(service.id);
+    closeModal();
   });
 
   renderSettingsLists();
