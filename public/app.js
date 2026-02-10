@@ -51,13 +51,9 @@ const dom = {
   btnAddGeneric: document.getElementById('btnAddGeneric'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
-  btnInvoice: document.getElementById('btnInvoice'),
-  btnBackup: document.getElementById('btnBackup'),
-  btnRestore: document.getElementById('btnRestore'),
   btnLogout: document.getElementById('btnLogout'),
   serverStatus: document.getElementById('serverStatus'),
   serverDot: document.getElementById('serverDot'),
-  serverText: document.getElementById('serverText'),
   userInfo: document.getElementById('userInfo'),
   authRoot: document.getElementById('authRoot'),
   modalRoot: document.getElementById('modalRoot')
@@ -164,10 +160,9 @@ function debounce(fn, delay = 200) {
 }
 
 function setServerStatus(online) {
-  if (!dom.serverDot || !dom.serverText) return;
+  if (!dom.serverDot) return;
   dom.serverDot.classList.toggle('online', online);
   dom.serverDot.classList.toggle('offline', !online);
-  dom.serverText.textContent = online ? 'Server: běží' : 'Server: nedostupný';
 }
 
 async function checkServer() {
@@ -231,11 +226,6 @@ function updateUserUi() {
   const isLogged = !!state.auth.user;
   const canEconomy = isAdmin || isWorker;
   dom.btnEconomy.classList.toggle('hidden', !canEconomy);
-  if (dom.btnInvoice) {
-    dom.btnInvoice.classList.toggle('hidden', !canEconomy);
-  }
-  dom.btnBackup.classList.toggle('hidden', !isAdmin);
-  dom.btnRestore.classList.toggle('hidden', !isAdmin);
   dom.summaryStats.classList.toggle('hidden', !isAdmin);
   dom.btnLogout.classList.toggle('hidden', !state.auth.user);
 }
@@ -1114,22 +1104,6 @@ async function openEconomyModal() {
   await loadEconomy();
 }
 
-async function openInvoiceModal() {
-  openModal(`
-    <div class="modal-header">
-      <div>
-        <h2>Faktura</h2>
-        <div class="meta">Náhled textu faktury.</div>
-      </div>
-      <button class="ghost" id="closeModal">Zavřít</button>
-    </div>
-    <div class="modal-grid">
-      <textarea rows="6" readonly>Zde může být automaticky vygenerovaná faktura na základě zvolených procent o spolupráci.</textarea>
-    </div>
-  `);
-
-  document.getElementById('closeModal').addEventListener('click', closeModal);
-}
 
 function settingsSectionTemplate({
   title,
@@ -1532,52 +1506,6 @@ async function deleteSetting(section, id) {
   await openSettingsModal();
 }
 
-async function handleBackup() {
-  const data = await api.get('/api/backup');
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `kartoteka-${todayLocal()}.json`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function openRestoreModal() {
-  openModal(`
-    <div class="modal-header">
-      <div>
-        <h2>Obnova ze zálohy</h2>
-        <div class="meta">Vyber JSON soubor vytvořený funkcí Záloha.</div>
-      </div>
-      <button class="ghost" id="closeModal">Zavřít</button>
-    </div>
-    <div class="modal-grid">
-      <input type="file" id="restoreFile" accept="application/json" />
-      <div class="actions-row">
-        <button class="primary" id="restoreBtn">Obnovit</button>
-      </div>
-    </div>
-  `);
-
-  document.getElementById('closeModal').addEventListener('click', closeModal);
-
-  document.getElementById('restoreBtn').addEventListener('click', async () => {
-    const fileInput = document.getElementById('restoreFile');
-    const file = fileInput.files[0];
-    if (!file) {
-      alert('Vyber soubor se zálohou.');
-      return;
-    }
-    const text = await file.text();
-    const json = JSON.parse(text);
-    await api.post('/api/restore', json);
-    closeModal();
-    handleUnauthorized();
-  });
-}
 
 function wireEvents() {
   dom.searchInput.addEventListener('input', debounce(loadClients));
@@ -1597,11 +1525,6 @@ function wireEvents() {
     openSettingsModal().catch(() => {});
   });
   dom.btnEconomy.addEventListener('click', openEconomyModal);
-  if (dom.btnInvoice) {
-    dom.btnInvoice.addEventListener('click', openInvoiceModal);
-  }
-  dom.btnBackup.addEventListener('click', handleBackup);
-  dom.btnRestore.addEventListener('click', openRestoreModal);
   dom.btnLogout.addEventListener('click', handleLogout);
   dom.treatmentType.addEventListener('change', updatePricePreview);
   dom.manualTotal.addEventListener('input', updatePricePreview);
