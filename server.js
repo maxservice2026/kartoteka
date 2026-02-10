@@ -706,13 +706,6 @@ app.get('/api/public/availability', async (req, res) => {
   });
 
   const available = [];
-  const gapSlots = duration > 30 ? 2 : 0;
-
-  const violatesGap = (workerId, startIndex, endIndex) => {
-    if (!gapSlots) return false;
-    const list = reservationsByWorker.get(workerId) || [];
-    return list.some((res) => startIndex < res.endIndex + gapSlots && endIndex > res.startIndex - gapSlots);
-  };
 
   availableByWorker.forEach((value, workerId) => {
     const reservedSlots = reservedByWorker.get(workerId) || new Set();
@@ -731,9 +724,6 @@ app.get('/api/public/availability', async (req, res) => {
           break;
         }
       }
-      if (ok && violatesGap(workerId, startIndex, startIndex + requiredSlots)) {
-        ok = false;
-      }
       if (ok) {
         available.push({
           time_slot: slot,
@@ -743,18 +733,6 @@ app.get('/api/public/availability', async (req, res) => {
       }
     });
   });
-
-  const blockedStarts = [];
-  if (gapSlots) {
-    baseSlots.forEach((slot) => {
-      if (slot.reserved) return;
-      const startIndex = slotIndex[slot.time_slot];
-      if (startIndex === undefined) return;
-      if (violatesGap(slot.worker_id, startIndex, startIndex + requiredSlots)) {
-        blockedStarts.push({ worker_id: slot.worker_id, time_slot: slot.time_slot });
-      }
-    });
-  }
 
   available.sort((a, b) => {
     if (a.time_slot === b.time_slot) {
@@ -770,7 +748,7 @@ app.get('/api/public/availability', async (req, res) => {
     return a.time_slot.localeCompare(b.time_slot);
   });
 
-  res.json({ slots: available, base_slots: baseSlots, duration, blocked_starts: blockedStarts });
+  res.json({ slots: available, base_slots: baseSlots, duration, blocked_starts: [] });
 });
 
 app.post('/api/public/reservations', async (req, res) => {
@@ -831,17 +809,6 @@ app.post('/api/public/reservations', async (req, res) => {
     row._startIndex = idx;
     row._endIndex = endIndex;
   });
-
-  const gapSlots = duration > 30 ? 2 : 0;
-  if (gapSlots) {
-    const endIndex = startIndex + requiredSlots;
-    const violatesGap = existingReservations.some(
-      (row) => startIndex < row._endIndex + gapSlots && endIndex > row._startIndex - gapSlots
-    );
-    if (violatesGap) {
-      return res.status(409).json({ error: 'Termín není dostupný.' });
-    }
-  }
 
   for (let i = 0; i < requiredSlots; i += 1) {
     const slot = slotList[startIndex + i];
