@@ -886,6 +886,7 @@ async function openEconomyModal() {
         <button class="ghost" data-range="month">Tento měsíc</button>
         <button class="ghost" data-range="prev-month">Minulý měsíc</button>
         <button class="ghost" data-range="quarter">Aktuální kvartál</button>
+        <button class="ghost" data-range="prev-quarter">Minulý kvartál</button>
         <button class="ghost" data-range="year">Aktuální rok</button>
         <button class="ghost" data-range="prev-year">Minulý rok</button>
       </div>
@@ -983,6 +984,10 @@ async function openEconomyModal() {
       const quarterStart = Math.floor(month / 3) * 3;
       start = new Date(year, quarterStart, 1);
       end = new Date(year, quarterStart + 3, 0);
+    } else if (kind === 'prev-quarter') {
+      const quarterStart = Math.floor(month / 3) * 3;
+      start = new Date(year, quarterStart - 3, 1);
+      end = new Date(year, quarterStart, 0);
     } else if (kind === 'year') {
       start = new Date(year, 0, 1);
       end = new Date(year, 11, 31);
