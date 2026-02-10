@@ -76,6 +76,7 @@ const state = {
   users: [],
   selectedServiceId: null,
   proAllowed: false,
+  proPin: '',
   auth: {
     token: null,
     user: null,
@@ -93,6 +94,9 @@ const api = {
     const token = state.auth.token || localStorage.getItem('kartoteka_token');
     if (token) {
       headers.Authorization = `Bearer ${token}`;
+    }
+    if (state.proPin) {
+      headers['x-pro-pin'] = state.proPin;
     }
 
     let response;
@@ -240,9 +244,23 @@ function applyProAccess() {
   const proButtons = [dom.btnEconomy, dom.btnCalendar, dom.btnBilling, dom.btnNotifications];
   proButtons.forEach((button) => {
     if (!button) return;
-    button.disabled = !allow;
     button.classList.toggle('pro-locked', !allow);
   });
+}
+
+async function ensureProAccess() {
+  if (state.proAllowed) return true;
+  const pin = prompt('Zadej PIN pro PRO funkce:');
+  if (!pin) return false;
+  state.proPin = pin.trim();
+  const allowed = await loadProAccess();
+  if (!allowed) {
+    alert('PIN není správný.');
+    state.proPin = '';
+    applyProAccess();
+    return false;
+  }
+  return true;
 }
 
 function hideAuthScreen() {
@@ -343,6 +361,7 @@ async function loadProAccess() {
     state.proAllowed = false;
   }
   applyProAccess();
+  return state.proAllowed;
 }
 
 async function bootstrapAuth() {
@@ -1782,9 +1801,31 @@ function wireEvents() {
   dom.btnSettings.addEventListener('click', () => {
     openSettingsModal().catch(() => {});
   });
-  dom.btnEconomy.addEventListener('click', openEconomyModal);
+  dom.btnEconomy.addEventListener('click', async () => {
+    if (await ensureProAccess()) {
+      openEconomyModal();
+    }
+  });
   if (dom.btnCalendar) {
-    dom.btnCalendar.addEventListener('click', openCalendarModal);
+    dom.btnCalendar.addEventListener('click', async () => {
+      if (await ensureProAccess()) {
+        openCalendarModal();
+      }
+    });
+  }
+  if (dom.btnBilling) {
+    dom.btnBilling.addEventListener('click', async () => {
+      if (await ensureProAccess()) {
+        alert('Fakturace bude dostupná v PRO verzi.');
+      }
+    });
+  }
+  if (dom.btnNotifications) {
+    dom.btnNotifications.addEventListener('click', async () => {
+      if (await ensureProAccess()) {
+        alert('Notifikace budou dostupné v PRO verzi.');
+      }
+    });
   }
   dom.btnLogout.addEventListener('click', handleLogout);
   dom.treatmentType.addEventListener('change', updatePricePreview);

@@ -9,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
 const DEFAULT_PRO_ALLOWED_IPS = ['46.135.1.58', '34.160.111.145'];
+const PRO_PIN = process.env.PRO_PIN || '224234234';
 const PRO_ALLOWED_IPS = (process.env.PRO_ALLOWED_IPS || DEFAULT_PRO_ALLOWED_IPS.join(','))
   .split(',')
   .map((ip) => ip.trim())
@@ -121,6 +122,11 @@ function isProAllowed(req) {
   if (!ip) return false;
   if (ip === '127.0.0.1' || ip === '::1') return true;
   return PRO_ALLOWED_IPS.includes(ip);
+}
+
+function isProPinValid(req) {
+  const pin = (req.headers['x-pro-pin'] || '').toString().trim();
+  return Boolean(pin) && pin === PRO_PIN;
 }
 
 app.get('/rezervace', (req, res) => {
@@ -295,7 +301,7 @@ function requireEconomyAccess(req, res, next) {
 }
 
 function requireProAccess(req, res, next) {
-  if (!isProAllowed(req)) {
+  if (!isProAllowed(req) && !isProPinValid(req)) {
     return res.status(403).json({ error: 'PRO přístup pouze pro povolené zařízení.' });
   }
   return next();

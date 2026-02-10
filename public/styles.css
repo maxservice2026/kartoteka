@@ -175,6 +175,11 @@ button.pro-button:disabled {
   color: #6c82c4;
 }
 
+.pro-locked {
+  border-color: rgba(27, 79, 216, 0.25);
+  box-shadow: 0 0 0 1px rgba(27, 79, 216, 0.08) inset;
+}
+
 .pro-pill {
   display: inline-flex;
   align-items: center;
