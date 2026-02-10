@@ -584,7 +584,6 @@ button.primary:hover {
 .slot-button.is-reserved {
   border-style: dashed;
   color: #9b9b9b;
-  text-decoration: line-through;
   background: rgba(148, 148, 148, 0.08);
 }
 

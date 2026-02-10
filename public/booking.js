@@ -120,9 +120,9 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'ghost slot-button';
-    button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>${
-      slot.reserved ? '<span class="slot-status">Rezervováno</span>' : ''
-    }`;
+    button.innerHTML = slot.reserved
+      ? `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`
+      : `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>`;
     button.dataset.workerId = slot.worker_id;
     button.dataset.time = slot.time_slot;
     if (slot.reserved) {
