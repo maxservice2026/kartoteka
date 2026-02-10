@@ -51,6 +51,7 @@ const dom = {
   btnAddGeneric: document.getElementById('btnAddGeneric'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
+  btnInvoice: document.getElementById('btnInvoice'),
   btnBackup: document.getElementById('btnBackup'),
   btnRestore: document.getElementById('btnRestore'),
   btnLogout: document.getElementById('btnLogout'),
@@ -225,9 +226,14 @@ function updateUserUi() {
   }
 
   const isAdmin = state.auth.user?.role === 'admin';
+  const isWorker = state.auth.user?.role === 'worker';
   dom.btnSettings.classList.toggle('hidden', !isAdmin);
   const isLogged = !!state.auth.user;
-  dom.btnEconomy.classList.toggle('hidden', !isAdmin);
+  const canEconomy = isAdmin || isWorker;
+  dom.btnEconomy.classList.toggle('hidden', !canEconomy);
+  if (dom.btnInvoice) {
+    dom.btnInvoice.classList.toggle('hidden', !canEconomy);
+  }
   dom.btnBackup.classList.toggle('hidden', !isAdmin);
   dom.btnRestore.classList.toggle('hidden', !isAdmin);
   dom.summaryStats.classList.toggle('hidden', !isAdmin);
@@ -859,6 +865,16 @@ function monthRange() {
 
 async function openEconomyModal() {
   const range = monthRange();
+  const isAdmin = state.auth.user?.role === 'admin';
+  const serviceOptions = '<option value="">Všechny služby</option>' + state.settings.services
+    .map((service) => `<option value="${service.id}">${service.name}</option>`)
+    .join('');
+  const workerOptions = '<option value="">Všichni pracovníci</option>' + state.settings.workers
+    .map((worker) => `<option value="${worker.id}">${worker.name}</option>`)
+    .join('');
+  const expenseWorkerOptions = '<option value="">Bez pracovníka</option>' + state.settings.workers
+    .map((worker) => `<option value="${worker.id}">${worker.name}</option>`)
+    .join('');
   openModal(`
     <div class="modal-header">
       <div>
@@ -878,6 +894,18 @@ async function openEconomyModal() {
           <input type="date" id="ecoTo" value="${range.to}" />
         </div>
       </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Služba</label>
+          <select id="ecoService">${serviceOptions}</select>
+        </div>
+        ${isAdmin
+          ? `<div class="field">
+              <label>Pracovník</label>
+              <select id="ecoWorker">${workerOptions}</select>
+            </div>`
+          : ''}
+      </div>
       <div class="actions-row">
         <button class="ghost" id="ecoFilter">Filtrovat</button>
       </div>
@@ -893,6 +921,18 @@ async function openEconomyModal() {
             <label>Částka</label>
             <input type="number" id="expenseAmount" min="0" step="1" />
           </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>DPH (%)</label>
+            <input type="number" id="expenseVat" min="0" step="1" value="0" />
+          </div>
+          ${isAdmin
+            ? `<div class="field">
+                <label>Pracovník</label>
+                <select id="expenseWorker">${expenseWorkerOptions}</select>
+              </div>`
+            : ''}
         </div>
         <div class="field-row">
           <div class="field">
@@ -912,10 +952,12 @@ async function openEconomyModal() {
         <h3>Příjmy (ošetření)</h3>
         <div id="ecoVisits"></div>
       </div>
-      <div class="settings-section">
-        <h3>Podle uživatele</h3>
-        <div id="ecoByWorker"></div>
-      </div>
+      ${isAdmin
+        ? `<div class="settings-section">
+            <h3>Podle uživatele</h3>
+            <div id="ecoByWorker"></div>
+          </div>`
+        : ''}
       <div class="settings-section">
         <h3>Výdaje</h3>
         <div id="ecoExpenses"></div>
@@ -929,15 +971,30 @@ async function openEconomyModal() {
   async function loadEconomy() {
     const from = document.getElementById('ecoFrom').value;
     const to = document.getElementById('ecoTo').value;
-    const data = await api.get(`/api/economy?from=${from}&to=${to}`);
+    const params = new URLSearchParams({ from, to });
+    const serviceId = document.getElementById('ecoService')?.value;
+    const workerId = isAdmin ? document.getElementById('ecoWorker')?.value : '';
+    if (serviceId) params.set('service_id', serviceId);
+    if (workerId) params.set('worker_id', workerId);
+    const data = await api.get(`/api/economy?${params.toString()}`);
     const summary = document.getElementById('ecoSummary');
-    summary.innerHTML = `
+    let summaryHtml = `
       <div class="stats">
-        <div>Tržba: <strong>${formatCzk(data.totals.income)}</strong></div>
-        <div>Výdaje: <strong>${formatCzk(data.totals.expenses)}</strong></div>
-        <div>Zisk: <strong>${formatCzk(data.totals.profit)}</strong></div>
+        <div>Tržba (filtr): <strong>${formatCzk(data.totals.income)}</strong></div>
+        <div>Výdaje (filtr): <strong>${formatCzk(data.totals.expenses)}</strong></div>
+        <div>Zisk (filtr): <strong>${formatCzk(data.totals.profit)}</strong></div>
       </div>
     `;
+    if (data.totals_all) {
+      summaryHtml += `
+        <div class="stats">
+          <div>Tržba (celkem): <strong>${formatCzk(data.totals_all.income)}</strong></div>
+          <div>Výdaje (celkem): <strong>${formatCzk(data.totals_all.expenses)}</strong></div>
+          <div>Zisk (celkem): <strong>${formatCzk(data.totals_all.profit)}</strong></div>
+        </div>
+      `;
+    }
+    summary.innerHTML = summaryHtml;
 
     const visits = document.getElementById('ecoVisits');
     if (!data.visits.length) {
@@ -946,7 +1003,7 @@ async function openEconomyModal() {
       visits.innerHTML = data.visits
         .map((visit) => `
           <div class="settings-item">
-            <span>${visit.date} • ${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
+            <span>${visit.date} • ${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}${visit.worker_name ? ` • ${visit.worker_name}` : ''}</span>
             <span>${formatCzk(visit.total)}</span>
           </div>
         `)
@@ -960,7 +1017,7 @@ async function openEconomyModal() {
       expenses.innerHTML = data.expenses
         .map((expense) => `
           <div class="settings-item">
-            <span>${expense.date} • ${expense.title}</span>
+            <span>${expense.date} • ${expense.title}${expense.worker_name ? ` • ${expense.worker_name}` : ''}${expense.vat_rate ? ` • DPH ${expense.vat_rate}%` : ''}</span>
             <span>${formatCzk(expense.amount)}</span>
           </div>
         `)
@@ -968,17 +1025,19 @@ async function openEconomyModal() {
     }
 
     const byWorker = document.getElementById('ecoByWorker');
-    if (!data.by_worker || !data.by_worker.length) {
-      byWorker.innerHTML = '<div class="hint">Zatím žádná data podle pracovníka.</div>';
-    } else {
-      byWorker.innerHTML = data.by_worker
-        .map((row) => `
-          <div class="settings-item">
-            <span>${row.worker_name || 'Neurčeno'}</span>
-            <span>${formatCzk(row.total)}</span>
-          </div>
-        `)
-        .join('');
+    if (byWorker) {
+      if (!data.by_worker || !data.by_worker.length) {
+        byWorker.innerHTML = '<div class="hint">Zatím žádná data podle pracovníka.</div>';
+      } else {
+        byWorker.innerHTML = data.by_worker
+          .map((row) => `
+            <div class="settings-item">
+              <span>${row.worker_name || 'Neurčeno'}</span>
+              <span>${formatCzk(row.total)}</span>
+            </div>
+          `)
+          .join('');
+      }
     }
   }
 
@@ -990,20 +1049,62 @@ async function openEconomyModal() {
       alert('Vyplň popis a částku výdaje.');
       return;
     }
+    const vatRate = document.getElementById('expenseVat').value || '0';
+    const workerId = isAdmin ? document.getElementById('expenseWorker')?.value : '';
     await api.post('/api/expenses', {
       title,
       amount,
+      vat_rate: vatRate,
+      worker_id: workerId || null,
       date: document.getElementById('expenseDate').value,
       note: document.getElementById('expenseNote').value.trim()
     });
     document.getElementById('expenseTitle').value = '';
     document.getElementById('expenseAmount').value = '';
+    document.getElementById('expenseVat').value = '0';
     document.getElementById('expenseNote').value = '';
     await loadEconomy();
     await loadSummary();
   });
 
   await loadEconomy();
+}
+
+async function openInvoiceModal() {
+  const range = monthRange();
+  const params = new URLSearchParams({ from: range.from, to: range.to });
+  const data = await api.get(`/api/economy?${params.toString()}`);
+  const name = state.auth.user?.full_name || 'Pracovník';
+  const income = formatCzk(data.totals?.income || 0);
+  const expenses = formatCzk(data.totals?.expenses || 0);
+  const profit = formatCzk(data.totals?.profit || 0);
+
+  const text = [
+    `Faktura (náhled)`,
+    `Vystavil: ${name}`,
+    `Období: ${range.from} – ${range.to}`,
+    '',
+    `Tržby: ${income}`,
+    `Náklady: ${expenses}`,
+    `Zisk: ${profit}`,
+    '',
+    `Poznámka: Tento text může být nahrazen automaticky generovanou fakturou.`
+  ].join('\n');
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Faktura</h2>
+        <div class="meta">Náhled textu faktury podle tržeb.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      <textarea rows="12" readonly>${text}</textarea>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
 }
 
 function settingsSectionTemplate({
@@ -1392,6 +1493,9 @@ function wireEvents() {
     openSettingsModal().catch(() => {});
   });
   dom.btnEconomy.addEventListener('click', openEconomyModal);
+  if (dom.btnInvoice) {
+    dom.btnInvoice.addEventListener('click', openInvoiceModal);
+  }
   dom.btnBackup.addEventListener('click', handleBackup);
   dom.btnRestore.addEventListener('click', openRestoreModal);
   dom.btnLogout.addEventListener('click', handleLogout);

@@ -235,6 +235,13 @@ function requireRole(role) {
   };
 }
 
+function requireEconomyAccess(req, res, next) {
+  if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'worker')) {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+  return next();
+}
+
 async function initDb() {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS skin_types (
@@ -326,7 +333,9 @@ async function initDb() {
       date TEXT NOT NULL,
       title TEXT NOT NULL,
       amount INTEGER NOT NULL,
+      vat_rate INTEGER NOT NULL DEFAULT 0,
       note TEXT,
+      worker_id TEXT,
       created_at TEXT NOT NULL
     );
   `);
@@ -334,6 +343,8 @@ async function initDb() {
   await ensureColumn('clients', 'cream', 'TEXT');
   await ensureColumn('visits', 'service_id', 'TEXT');
   await ensureColumn('visits', 'service_data', 'TEXT');
+  await ensureColumn('expenses', 'vat_rate', 'INTEGER DEFAULT 0');
+  await ensureColumn('expenses', 'worker_id', 'TEXT');
 }
 
 async function seedDefaults() {
@@ -817,7 +828,7 @@ app.delete('/api/visits/:id', async (req, res) => {
   res.json({ ok: info.changes > 0 });
 });
 
-app.post('/api/expenses', requireAdmin, async (req, res) => {
+app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
   const payload = req.body || {};
   const title = (payload.title || '').trim();
   if (!title) return res.status(400).json({ error: 'title is required' });
@@ -825,31 +836,59 @@ app.post('/api/expenses', requireAdmin, async (req, res) => {
   const amount = Math.abs(toInt(payload.amount, 0));
   if (!amount) return res.status(400).json({ error: 'amount is required' });
 
+  const vatRate = Math.max(0, toInt(payload.vat_rate, 0));
+  const workerId = req.user.role === 'admin' ? (payload.worker_id || null) : req.user.id;
+  if (workerId) {
+    const worker = await db.get('SELECT id, full_name FROM users WHERE id = ? AND active = 1', [workerId]);
+    if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
+    await upsertWorker(worker.id, worker.full_name, 1);
+  }
+
   const id = newId();
   await db.run(
-    `INSERT INTO expenses (id, date, title, amount, note, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses (id, date, title, amount, vat_rate, note, worker_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ,
-    [id, toDateOnly(payload.date), title, amount, payload.note || null, nowIso()]
+    [id, toDateOnly(payload.date), title, amount, vatRate, payload.note || null, workerId, nowIso()]
   );
 
   res.json({ id });
 });
 
-app.get('/api/expenses', requireAdmin, async (req, res) => {
+app.get('/api/expenses', requireEconomyAccess, async (req, res) => {
   const from = toDateOnly(req.query.from || null);
   const to = toDateOnly(req.query.to || null);
+  const workerFilter = req.user.role === 'worker' ? req.user.id : (req.query.worker_id || null);
+  const where = ['e.date BETWEEN ? AND ?'];
+  const params = [from, to];
+  if (workerFilter) {
+    where.push('e.worker_id = ?');
+    params.push(workerFilter);
+  }
   const rows = await db.all(
-    `SELECT * FROM expenses
-     WHERE date BETWEEN ? AND ?
-     ORDER BY date DESC, created_at DESC`
+    `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
+     FROM expenses e
+     LEFT JOIN users u ON e.worker_id = u.id
+     LEFT JOIN workers w ON e.worker_id = w.id
+     WHERE ${where.join(' AND ')}
+     ORDER BY e.date DESC, e.created_at DESC`
     ,
-    [from, to]
+    params
   );
   res.json(rows);
 });
 
-app.delete('/api/expenses/:id', requireAdmin, async (req, res) => {
+app.delete('/api/expenses/:id', requireEconomyAccess, async (req, res) => {
+  if (req.user.role === 'admin') {
+    const info = await db.run('DELETE FROM expenses WHERE id = ?', [req.params.id]);
+    return res.json({ ok: info.changes > 0 });
+  }
+
+  const exists = await db.get('SELECT id, worker_id FROM expenses WHERE id = ?', [req.params.id]);
+  if (!exists) return res.json({ ok: false });
+  if (exists.worker_id !== req.user.id) {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
   const info = await db.run('DELETE FROM expenses WHERE id = ?', [req.params.id]);
   res.json({ ok: info.changes > 0 });
 });
@@ -867,8 +906,22 @@ function economyRange(req) {
   return { from: from || fromAuto, to: to || toAuto };
 }
 
-app.get('/api/economy', requireAdmin, async (req, res) => {
+app.get('/api/economy', requireEconomyAccess, async (req, res) => {
   const range = economyRange(req);
+  const role = req.user.role;
+  const workerFilter = role === 'worker' ? req.user.id : (req.query.worker_id || null);
+  const serviceFilter = req.query.service_id || null;
+
+  const visitsWhere = ['v.date BETWEEN ? AND ?'];
+  const visitsParams = [range.from, range.to];
+  if (workerFilter) {
+    visitsWhere.push('v.worker_id = ?');
+    visitsParams.push(workerFilter);
+  }
+  if (serviceFilter) {
+    visitsWhere.push('v.service_id = ?');
+    visitsParams.push(serviceFilter);
+  }
 
   const visits = await db.all(
     `SELECT v.*, c.full_name as client_name, t.name as treatment_name,
@@ -880,36 +933,78 @@ app.get('/api/economy', requireAdmin, async (req, res) => {
      LEFT JOIN treatments t ON v.treatment_id = t.id
      LEFT JOIN users u ON v.worker_id = u.id
      LEFT JOIN workers w ON v.worker_id = w.id
-     WHERE v.date BETWEEN ? AND ?
+     WHERE ${visitsWhere.join(' AND ')}
      ORDER BY v.date DESC, v.created_at DESC`
     ,
-    [range.from, range.to]
+    visitsParams
   );
 
+  const expensesWhere = ['e.date BETWEEN ? AND ?'];
+  const expensesParams = [range.from, range.to];
+  if (workerFilter) {
+    expensesWhere.push('e.worker_id = ?');
+    expensesParams.push(workerFilter);
+  }
+
   const expenses = await db.all(
-    `SELECT * FROM expenses
-     WHERE date BETWEEN ? AND ?
-     ORDER BY date DESC, created_at DESC`
+    `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
+     FROM expenses e
+     LEFT JOIN users u ON e.worker_id = u.id
+     LEFT JOIN workers w ON e.worker_id = w.id
+     WHERE ${expensesWhere.join(' AND ')}
+     ORDER BY e.date DESC, e.created_at DESC`
     ,
-    [range.from, range.to]
+    expensesParams
   );
 
   const incomeTotal = visits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const expenseTotal = expenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
 
-  const byWorker = await db.all(
-    `SELECT COALESCE(u.id, w.id) as worker_id,
-            COALESCE(u.full_name, w.name) as worker_name,
-            SUM(v.total) as total
-     FROM visits v
-     LEFT JOIN users u ON v.worker_id = u.id
-     LEFT JOIN workers w ON v.worker_id = w.id
-     WHERE v.date BETWEEN ? AND ?
-     GROUP BY COALESCE(u.id, w.id)
-     ORDER BY total DESC`
-    ,
-    [range.from, range.to]
-  );
+  let byWorker = [];
+  if (role === 'admin') {
+    const byWorkerWhere = ['v.date BETWEEN ? AND ?'];
+    const byWorkerParams = [range.from, range.to];
+    if (serviceFilter) {
+      byWorkerWhere.push('v.service_id = ?');
+      byWorkerParams.push(serviceFilter);
+    }
+    if (workerFilter) {
+      byWorkerWhere.push('v.worker_id = ?');
+      byWorkerParams.push(workerFilter);
+    }
+    byWorker = await db.all(
+      `SELECT COALESCE(u.id, w.id) as worker_id,
+              COALESCE(u.full_name, w.name) as worker_name,
+              SUM(v.total) as total
+       FROM visits v
+       LEFT JOIN users u ON v.worker_id = u.id
+       LEFT JOIN workers w ON v.worker_id = w.id
+       WHERE ${byWorkerWhere.join(' AND ')}
+       GROUP BY COALESCE(u.id, w.id)
+       ORDER BY total DESC`
+      ,
+      byWorkerParams
+    );
+  }
+
+  let totalsAll = null;
+  if (role === 'admin') {
+    const visitsAll = await db.all(
+      `SELECT total FROM visits WHERE date BETWEEN ? AND ?`,
+      [range.from, range.to]
+    );
+    const expensesAll = await db.all(
+      `SELECT amount FROM expenses WHERE date BETWEEN ? AND ?`,
+      [range.from, range.to]
+    );
+    const incomeAll = visitsAll.reduce((sum, row) => sum + toInt(row.total, 0), 0);
+    const expenseAll = expensesAll.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
+    totalsAll = {
+      income: incomeAll,
+      expenses: expenseAll,
+      profit: incomeAll - expenseAll
+    };
+  }
 
   res.json({
     range,
@@ -918,6 +1013,7 @@ app.get('/api/economy', requireAdmin, async (req, res) => {
       expenses: expenseTotal,
       profit: incomeTotal - expenseTotal
     },
+    totals_all: totalsAll,
     visits,
     expenses,
     by_worker: byWorker
