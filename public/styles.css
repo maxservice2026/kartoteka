@@ -566,6 +566,18 @@ button.primary:hover {
   font-weight: 600;
 }
 
+.slot-button.is-valid {
+  border-color: #1f9a4c;
+  background: rgba(31, 154, 76, 0.18);
+  color: #1f9a4c;
+}
+
+.slot-button.is-invalid {
+  border-color: #d0422b;
+  background: rgba(208, 66, 43, 0.16);
+  color: #d0422b;
+}
+
 .availability-section {
   margin-top: 10px;
 }

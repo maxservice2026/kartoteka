@@ -25,6 +25,10 @@ function todayLocal() {
 
 function setResult(message, isError = false) {
   dom.result.textContent = message;
+  if (!message) {
+    dom.result.removeAttribute('style');
+    return;
+  }
   dom.result.style.color = isError ? '#d0422b' : '#1f9a4c';
 }
 
@@ -66,17 +70,29 @@ function renderSlots(slots, hintText = '') {
   const requiredSlots = Math.max(1, Math.ceil(state.duration / 30));
 
   const highlightSelection = (workerId, startTime) => {
-    document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('is-selected'));
+    document.querySelectorAll('.slot-button').forEach((item) => {
+      item.classList.remove('is-selected', 'is-valid', 'is-invalid');
+    });
     const startIndex = slotList.indexOf(startTime);
-    if (startIndex === -1) return;
+    if (startIndex === -1) return false;
+    let ok = true;
     for (let i = 0; i < requiredSlots; i += 1) {
       const slot = slotList[startIndex + i];
-      if (!slot) break;
-      const cell = document.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
-      if (cell) {
-        cell.classList.add('is-selected');
+      if (!slot) {
+        ok = false;
+        break;
       }
+      const cell = document.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
+      if (!cell) {
+        ok = false;
+        break;
+      }
+      cell.classList.add('is-selected');
     }
+    document.querySelectorAll('.slot-button.is-selected').forEach((cell) => {
+      cell.classList.add(ok ? 'is-valid' : 'is-invalid');
+    });
+    return ok;
   };
 
   slots.forEach((slot) => {
@@ -94,8 +110,13 @@ function renderSlots(slots, hintText = '') {
         time: slot.time_slot,
         worker_name: slot.worker_name
       };
-      dom.submit.disabled = false;
-      highlightSelection(slot.worker_id, slot.time_slot);
+      const valid = highlightSelection(slot.worker_id, slot.time_slot);
+      dom.submit.disabled = !valid;
+      if (!valid) {
+        setResult('Vybraný termín nevyhovuje délce služby.', true);
+      } else {
+        setResult('', false);
+      }
     });
     dom.slots.appendChild(button);
   });
@@ -115,9 +136,21 @@ async function loadSlots() {
   const data = await response.json();
   state.duration = Number(data.duration) || 30;
   renderSlots(data.slots || []);
+  if (state.selectedSlot) {
+    const selectedButton = document.querySelector(
+      `.slot-button[data-worker-id="${state.selectedSlot.worker_id}"][data-time="${state.selectedSlot.time}"]`
+    );
+    if (selectedButton) {
+      selectedButton.click();
+    }
+  }
 }
 
 async function submitReservation() {
+  if (dom.submit.disabled) {
+    setResult('Vybraný termín není validní pro délku služby.', true);
+    return;
+  }
   const payload = {
     service_id: dom.service.value,
     date: dom.date.value,
