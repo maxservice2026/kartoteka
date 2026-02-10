@@ -13,7 +13,8 @@ const dom = {
 
 const state = {
   services: [],
-  selectedSlot: null
+  selectedSlot: null,
+  duration: 30
 };
 
 function todayLocal() {
@@ -33,7 +34,24 @@ async function fetchServices() {
   state.services = data.services || [];
   dom.service.innerHTML =
     '<option value="">Vyber službu</option>' +
-    state.services.map((service) => `<option value="${service.id}">${service.name}</option>`).join('');
+    state.services
+      .map(
+        (service) =>
+          `<option value="${service.id}" data-duration="${service.duration_minutes || 30}">${service.name}</option>`
+      )
+      .join('');
+}
+
+function timeSlots() {
+  const slots = [];
+  for (let hour = 7; hour <= 19; hour += 1) {
+    const label = String(hour).padStart(2, '0');
+    slots.push(`${label}:00`);
+    if (hour !== 19) {
+      slots.push(`${label}:30`);
+    }
+  }
+  return slots;
 }
 
 function renderSlots(slots, hintText = '') {
@@ -43,6 +61,23 @@ function renderSlots(slots, hintText = '') {
     dom.slotsHint.textContent = hintText || 'Pro vybraný den nejsou volné termíny.';
     return;
   }
+
+  const slotList = timeSlots();
+  const requiredSlots = Math.max(1, Math.ceil(state.duration / 30));
+
+  const highlightSelection = (workerId, startTime) => {
+    document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('is-selected'));
+    const startIndex = slotList.indexOf(startTime);
+    if (startIndex === -1) return;
+    for (let i = 0; i < requiredSlots; i += 1) {
+      const slot = slotList[startIndex + i];
+      if (!slot) break;
+      const cell = document.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
+      if (cell) {
+        cell.classList.add('is-selected');
+      }
+    }
+  };
 
   slots.forEach((slot) => {
     const button = document.createElement('button');
@@ -60,6 +95,7 @@ function renderSlots(slots, hintText = '') {
         worker_name: slot.worker_name
       };
       dom.submit.disabled = false;
+      highlightSelection(slot.worker_id, slot.time_slot);
     });
     dom.slots.appendChild(button);
   });
@@ -77,6 +113,7 @@ async function loadSlots() {
 
   const response = await fetch(`/api/public/availability?date=${encodeURIComponent(date)}&service_id=${serviceId}`);
   const data = await response.json();
+  state.duration = Number(data.duration) || 30;
   renderSlots(data.slots || []);
 }
 
@@ -122,7 +159,11 @@ async function init() {
   await fetchServices();
   await loadSlots();
 
-  dom.service.addEventListener('change', loadSlots);
+  dom.service.addEventListener('change', () => {
+    const selected = dom.service.options[dom.service.selectedIndex];
+    state.duration = Number(selected?.dataset?.duration || 30);
+    loadSlots();
+  });
   dom.date.addEventListener('change', loadSlots);
   dom.submit.addEventListener('click', submitReservation);
 }

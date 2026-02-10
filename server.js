@@ -553,7 +553,9 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/public/services', async (req, res) => {
-  const services = await db.all('SELECT id, name FROM services WHERE active = 1 ORDER BY name');
+  const services = await db.all(
+    'SELECT id, name, duration_minutes FROM services WHERE active = 1 ORDER BY name'
+  );
   res.json({ services });
 });
 
@@ -618,6 +620,20 @@ app.get('/api/public/availability', async (req, res) => {
     availableByWorker.get(slot.worker_id).slots.add(slot.time_slot);
   });
 
+  const baseSlots = [];
+  availableByWorker.forEach((value, workerId) => {
+    const reservedSlots = reservedByWorker.get(workerId) || new Set();
+    value.slots.forEach((slot) => {
+      if (!reservedSlots.has(slot)) {
+        baseSlots.push({
+          time_slot: slot,
+          worker_id: workerId,
+          worker_name: value.worker_name
+        });
+      }
+    });
+  });
+
   const available = [];
   availableByWorker.forEach((value, workerId) => {
     const reservedSlots = reservedByWorker.get(workerId) || new Set();
@@ -653,7 +669,14 @@ app.get('/api/public/availability', async (req, res) => {
     return a.time_slot.localeCompare(b.time_slot);
   });
 
-  res.json({ slots: available });
+  baseSlots.sort((a, b) => {
+    if (a.time_slot === b.time_slot) {
+      return a.worker_name.localeCompare(b.worker_name, 'cs');
+    }
+    return a.time_slot.localeCompare(b.time_slot);
+  });
+
+  res.json({ slots: available, base_slots: baseSlots, duration });
 });
 
 app.post('/api/public/reservations', async (req, res) => {

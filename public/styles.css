@@ -559,6 +559,13 @@ button.primary:hover {
   background: rgba(244, 114, 43, 0.12);
 }
 
+.slot-button.is-selected {
+  border-color: #1b4fd8;
+  background: rgba(27, 79, 216, 0.16);
+  color: #1b4fd8;
+  font-weight: 600;
+}
+
 .availability-section {
   margin-top: 10px;
 }
