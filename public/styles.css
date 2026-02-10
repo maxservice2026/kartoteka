@@ -499,11 +499,13 @@ button.primary:hover {
   justify-content: center;
   gap: 4px;
   font-size: 13px;
+  cursor: pointer;
 }
 
 .calendar-day.empty {
   border: none;
   background: transparent;
+  cursor: default;
 }
 
 .calendar-day-number {
@@ -519,6 +521,11 @@ button.primary:hover {
 
 .calendar-day.has-reservation {
   border-color: rgba(27, 79, 216, 0.35);
+}
+
+.calendar-day.selected {
+  border-color: var(--accent);
+  background: rgba(244, 114, 43, 0.12);
 }
 
 .booking-page {

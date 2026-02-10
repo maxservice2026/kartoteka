@@ -852,6 +852,10 @@ function closeModal() {
   dom.modalRoot.innerHTML = '';
 }
 
+function durationOptions() {
+  return [30, 60, 90, 120, 150, 180, 210, 240];
+}
+
 function monthRange() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -980,6 +984,10 @@ async function openCalendarModal() {
     <div class="modal-grid">
       ${buildCalendarHtml(year, month, reservations)}
       <div class="hint">Modrá tečka značí den s rezervací.</div>
+      <div class="settings-section">
+        <h3>Rezervace v měsíci</h3>
+        <div id="calendarReservations" class="settings-list"></div>
+      </div>
       ${
         canEditAvailability
           ? `
@@ -999,6 +1007,54 @@ async function openCalendarModal() {
   `);
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
+
+  let monthReservations = [];
+  try {
+    const data = await api.get(`/api/reservations?year=${year}&month=${month + 1}`);
+    monthReservations = data.reservations || [];
+  } catch (err) {
+    monthReservations = [];
+  }
+
+  const listEl = document.getElementById('calendarReservations');
+  const renderReservationList = (dateFilter = '') => {
+    const filtered = dateFilter
+      ? monthReservations.filter((item) => item.date === dateFilter)
+      : monthReservations;
+    if (!filtered.length) {
+      listEl.innerHTML = '<div class="hint">Zatím žádné rezervace.</div>';
+      return;
+    }
+    listEl.innerHTML = filtered
+      .map(
+        (item) => `
+          <div class="settings-item">
+            <span>${item.date} • ${item.time_slot} • ${item.service_name || 'Služba'} • ${item.client_name}${
+          item.worker_name ? ` • ${item.worker_name}` : ''
+        }</span>
+            <span>${item.phone || item.email || ''}</span>
+          </div>
+        `
+      )
+      .join('');
+  };
+
+  renderReservationList();
+
+  document.querySelectorAll('.calendar-day').forEach((cell) => {
+    if (cell.classList.contains('empty')) return;
+    cell.addEventListener('click', () => {
+      document.querySelectorAll('.calendar-day').forEach((item) => item.classList.remove('selected'));
+      cell.classList.add('selected');
+      const day = cell.querySelector('.calendar-day-number')?.textContent;
+      if (!day) {
+        renderReservationList();
+        return;
+      }
+      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      renderReservationList(dateKey);
+    });
+  });
 
   if (canEditAvailability) {
     const data = await api.get('/api/availability');
@@ -1323,19 +1379,25 @@ async function openServiceDetailModal(serviceId) {
             <div class="meta">Název a typ formuláře.</div>
           </div>
         </div>
-        <div class="field-row">
-          <div class="field">
-            <label>Název</label>
-            <input id="serviceEditName" type="text" />
-          </div>
-          <div class="field">
-            <label>Formulář</label>
-            <select id="serviceEditForm">
-              <option value="cosmetic">Kosmetika (detailní)</option>
-              <option value="generic">Obecný</option>
-            </select>
-          </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Název</label>
+          <input id="serviceEditName" type="text" />
         </div>
+        <div class="field">
+          <label>Formulář</label>
+          <select id="serviceEditForm">
+            <option value="cosmetic">Kosmetika (detailní)</option>
+            <option value="generic">Obecný</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Délka (min)</label>
+          <select id="serviceEditDuration">
+            ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
+          </select>
+        </div>
+      </div>
         <div class="actions-row">
           <button class="primary" id="serviceSave">Uložit službu</button>
         </div>
@@ -1380,13 +1442,16 @@ async function openServiceDetailModal(serviceId) {
 
   const nameInput = document.getElementById('serviceEditName');
   const formSelect = document.getElementById('serviceEditForm');
+  const durationSelect = document.getElementById('serviceEditDuration');
   nameInput.value = service.name || '';
   formSelect.value = service.form_type || 'generic';
+  durationSelect.value = String(service.duration_minutes || 30);
 
   document.getElementById('serviceSave').addEventListener('click', async () => {
     const payload = {
       name: nameInput.value.trim(),
-      form_type: formSelect.value
+      form_type: formSelect.value,
+      duration_minutes: durationSelect.value
     };
     if (!payload.name) {
       alert('Vyplň název služby.');
@@ -1428,7 +1493,8 @@ async function openSettingsModal() {
       listId: 'serviceList',
       fields: [
         '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
-        '<div class="field"><label>Formulář</label><select data-field="form_type"><option value="cosmetic">Kosmetika (detailní)</option><option value="generic">Obecný</option></select></div>'
+        '<div class="field"><label>Formulář</label><select data-field="form_type"><option value="cosmetic">Kosmetika (detailní)</option><option value="generic">Obecný</option></select></div>',
+        '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
       ]
     })
   ];
@@ -1462,7 +1528,8 @@ function renderSettingsLists() {
     serviceList.innerHTML = state.settings.services
       .map((item) => {
         const label = item.form_type === 'cosmetic' ? 'Kosmetika' : 'Obecný';
-        return settingsItemTemplate(item, label, 'services');
+        const durationLabel = `${item.duration_minutes || 30} min`;
+        return settingsItemTemplate(item, `${label} • ${durationLabel}`, 'services');
       })
       .join('');
   }

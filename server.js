@@ -280,6 +280,7 @@ async function initDb() {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL DEFAULT 30,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
@@ -377,6 +378,7 @@ async function initDb() {
       time_slot TEXT NOT NULL,
       service_id TEXT NOT NULL,
       worker_id TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL DEFAULT 30,
       client_name TEXT NOT NULL,
       phone TEXT,
       email TEXT,
@@ -392,6 +394,11 @@ async function initDb() {
   await ensureColumn('visits', 'service_data', 'TEXT');
   await ensureColumn('expenses', 'vat_rate', 'INTEGER DEFAULT 0');
   await ensureColumn('expenses', 'worker_id', 'TEXT');
+  await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
+
+  await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
+  await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
 }
 
 async function seedDefaults() {
@@ -413,14 +420,14 @@ async function seedDefaults() {
   if (serviceCount === 0) {
     const now = nowIso();
     await db.run(
-      'INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)',
-      [newId(), 'Kosmetika', 'cosmetic', now]
+      'INSERT INTO services (id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?)',
+      [newId(), 'Kosmetika', 'cosmetic', 60, now]
     );
     const items = ['Laminace', 'Prodloužení řas', 'Masáže', 'Depilace', 'EMS a lymfodrenáž', 'Líčení'];
     for (const name of items) {
       await db.run(
-        'INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)',
-        [newId(), name, 'generic', now]
+        'INSERT INTO services (id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?)',
+        [newId(), name, 'generic', 60, now]
       );
     }
   }
@@ -557,6 +564,18 @@ app.get('/api/public/availability', async (req, res) => {
     return res.status(400).json({ error: 'Neplatné datum.' });
   }
 
+  let duration = 30;
+  if (req.query.service_id) {
+    const service = await db.get('SELECT duration_minutes FROM services WHERE id = ? AND active = 1', [
+      req.query.service_id
+    ]);
+    if (!service) return res.status(400).json({ error: 'Služba není platná.' });
+    duration = toInt(service.duration_minutes, 30);
+  }
+  const requiredSlots = Math.max(1, Math.ceil(duration / 30));
+  const slotList = timeSlots();
+  const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
+
   const slots = await db.all(
     `SELECT a.time_slot, a.worker_id, u.full_name as worker_name
      FROM availability a
@@ -567,12 +586,73 @@ app.get('/api/public/availability', async (req, res) => {
   );
 
   const reserved = await db.all(
-    'SELECT worker_id, time_slot FROM reservations WHERE date = ?',
+    `SELECT r.worker_id, r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes
+     FROM reservations r
+     LEFT JOIN services s ON s.id = r.service_id
+     WHERE r.date = ?`,
     [date]
   );
-  const reservedSet = new Set(reserved.map((row) => `${row.worker_id}:${row.time_slot}`));
 
-  const available = slots.filter((slot) => !reservedSet.has(`${slot.worker_id}:${slot.time_slot}`));
+  const reservedByWorker = new Map();
+  reserved.forEach((row) => {
+    const startIndex = slotIndex[row.time_slot];
+    if (startIndex === undefined) return;
+    const needed = Math.max(1, Math.ceil(toInt(row.duration_minutes, 30) / 30));
+    for (let i = 0; i < needed; i += 1) {
+      const slot = slotList[startIndex + i];
+      if (!slot) continue;
+      const key = row.worker_id;
+      if (!reservedByWorker.has(key)) reservedByWorker.set(key, new Set());
+      reservedByWorker.get(key).add(slot);
+    }
+  });
+
+  const availableByWorker = new Map();
+  slots.forEach((slot) => {
+    if (!availableByWorker.has(slot.worker_id)) {
+      availableByWorker.set(slot.worker_id, {
+        worker_name: slot.worker_name,
+        slots: new Set()
+      });
+    }
+    availableByWorker.get(slot.worker_id).slots.add(slot.time_slot);
+  });
+
+  const available = [];
+  availableByWorker.forEach((value, workerId) => {
+    const reservedSlots = reservedByWorker.get(workerId) || new Set();
+    slotList.forEach((slot) => {
+      const startIndex = slotIndex[slot];
+      if (startIndex === undefined) return;
+      let ok = true;
+      for (let i = 0; i < requiredSlots; i += 1) {
+        const checkSlot = slotList[startIndex + i];
+        if (!checkSlot) {
+          ok = false;
+          break;
+        }
+        if (!value.slots.has(checkSlot) || reservedSlots.has(checkSlot)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        available.push({
+          time_slot: slot,
+          worker_id: workerId,
+          worker_name: value.worker_name
+        });
+      }
+    });
+  });
+
+  available.sort((a, b) => {
+    if (a.time_slot === b.time_slot) {
+      return a.worker_name.localeCompare(b.worker_name, 'cs');
+    }
+    return a.time_slot.localeCompare(b.time_slot);
+  });
+
   res.json({ slots: available });
 });
 
@@ -591,8 +671,16 @@ app.post('/api/public/reservations', async (req, res) => {
     return res.status(400).json({ error: 'Vyplňte službu, termín a jméno.' });
   }
 
-  const service = await db.get('SELECT id FROM services WHERE id = ? AND active = 1', [serviceId]);
+  const service = await db.get('SELECT id, duration_minutes FROM services WHERE id = ? AND active = 1', [serviceId]);
   if (!service) return res.status(400).json({ error: 'Služba není platná.' });
+  const duration = Math.max(30, toInt(service.duration_minutes, 30));
+  const requiredSlots = Math.max(1, Math.ceil(duration / 30));
+  const slotList = timeSlots();
+  const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
+  const startIndex = slotIndex[timeSlot];
+  if (startIndex === undefined) {
+    return res.status(400).json({ error: 'Termín není platný.' });
+  }
 
   const worker = await db.get('SELECT id FROM users WHERE id = ? AND active = 1', [workerId]);
   if (!worker) return res.status(400).json({ error: 'Pracovník není platný.' });
@@ -600,22 +688,53 @@ app.post('/api/public/reservations', async (req, res) => {
   const day = weekdayIndex(date);
   if (day === null) return res.status(400).json({ error: 'Neplatné datum.' });
 
-  const available = await db.get(
-    'SELECT id FROM availability WHERE worker_id = ? AND day_of_week = ? AND time_slot = ?',
-    [workerId, day, timeSlot]
+  const availabilityRows = await db.all(
+    'SELECT time_slot FROM availability WHERE worker_id = ? AND day_of_week = ?',
+    [workerId, day]
   );
-  if (!available) return res.status(400).json({ error: 'Termín není dostupný.' });
+  const availabilitySet = new Set(availabilityRows.map((row) => row.time_slot));
 
-  const existing = await db.get(
-    'SELECT id FROM reservations WHERE worker_id = ? AND date = ? AND time_slot = ?',
-    [workerId, date, timeSlot]
+  const existingReservations = await db.all(
+    `SELECT r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes
+     FROM reservations r
+     LEFT JOIN services s ON s.id = r.service_id
+     WHERE r.worker_id = ? AND r.date = ?`,
+    [workerId, date]
   );
-  if (existing) return res.status(409).json({ error: 'Termín je už obsazený.' });
+  const reservedSlots = new Set();
+  existingReservations.forEach((row) => {
+    const idx = slotIndex[row.time_slot];
+    if (idx === undefined) return;
+    const needed = Math.max(1, Math.ceil(toInt(row.duration_minutes, 30) / 30));
+    for (let i = 0; i < needed; i += 1) {
+      const slot = slotList[idx + i];
+      if (slot) reservedSlots.add(slot);
+    }
+  });
+
+  for (let i = 0; i < requiredSlots; i += 1) {
+    const slot = slotList[startIndex + i];
+    if (!slot || !availabilitySet.has(slot) || reservedSlots.has(slot)) {
+      return res.status(409).json({ error: 'Termín není dostupný.' });
+    }
+  }
 
   await db.run(
-    `INSERT INTO reservations (id, date, time_slot, service_id, worker_id, client_name, phone, email, note, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [newId(), date, timeSlot, serviceId, workerId, clientName, phone || null, email || null, note || null, nowIso()]
+    `INSERT INTO reservations (id, date, time_slot, service_id, worker_id, duration_minutes, client_name, phone, email, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      newId(),
+      date,
+      timeSlot,
+      serviceId,
+      workerId,
+      duration,
+      clientName,
+      phone || null,
+      email || null,
+      note || null,
+      nowIso()
+    ]
   );
 
   res.json({ ok: true });
@@ -702,19 +821,49 @@ app.get('/api/reservations/calendar', async (req, res) => {
   res.json({ days });
 });
 
+app.get('/api/reservations', async (req, res) => {
+  const year = toInt(req.query.year, new Date().getFullYear());
+  const month = toInt(req.query.month, new Date().getMonth() + 1);
+  const lastDay = new Date(year, month, 0).getDate();
+  const from = `${year}-${pad2(month)}-01`;
+  const to = `${year}-${pad2(month)}-${pad2(lastDay)}`;
+
+  const where = ['r.date BETWEEN ? AND ?'];
+  const params = [from, to];
+  if (req.user.role === 'worker') {
+    where.push('r.worker_id = ?');
+    params.push(req.user.id);
+  }
+
+  const rows = await db.all(
+    `SELECT r.date, r.time_slot, r.client_name, r.phone, r.email, r.note,
+            s.name as service_name, u.full_name as worker_name
+     FROM reservations r
+     LEFT JOIN services s ON s.id = r.service_id
+     LEFT JOIN users u ON u.id = r.worker_id
+     WHERE ${where.join(' AND ')}
+     ORDER BY r.date, r.time_slot`,
+    params
+  );
+
+  res.json({ reservations: rows });
+});
+
 app.post('/api/services', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
+  const duration = toInt(payload.duration_minutes, 30);
   if (!name) return res.status(400).json({ error: 'name is required' });
+  if (duration < 30 || duration % 30 !== 0) {
+    return res.status(400).json({ error: 'duration must be in 30 minute steps' });
+  }
 
   const id = newId();
-  await db.run('INSERT INTO services (id, name, form_type, created_at) VALUES (?, ?, ?, ?)', [
-    id,
-    name,
-    formType,
-    nowIso()
-  ]);
+  await db.run(
+    'INSERT INTO services (id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?)',
+    [id, name, formType, duration, nowIso()]
+  );
   res.json({ id });
 });
 
@@ -722,9 +871,18 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
+  const duration = toInt(payload.duration_minutes, 30);
   if (!name) return res.status(400).json({ error: 'name is required' });
+  if (duration < 30 || duration % 30 !== 0) {
+    return res.status(400).json({ error: 'duration must be in 30 minute steps' });
+  }
 
-  await db.run('UPDATE services SET name = ?, form_type = ? WHERE id = ?', [name, formType, req.params.id]);
+  await db.run('UPDATE services SET name = ?, form_type = ?, duration_minutes = ? WHERE id = ?', [
+    name,
+    formType,
+    duration,
+    req.params.id
+  ]);
   res.json({ ok: true });
 });
 
