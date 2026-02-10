@@ -171,9 +171,9 @@ button.pro-button {
   justify-content: center;
   padding: 2px 8px;
   border-radius: 999px;
-  background: #111418;
-  color: #fff;
-  font-size: 10px;
+  background: rgba(27, 79, 216, 0.12);
+  color: #1b4fd8;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.6px;
 }
