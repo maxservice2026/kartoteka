@@ -9,10 +9,14 @@ const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
 
 const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const dbPath = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(dataDir, 'kartoteka.sqlite');
+const dbDir = path.dirname(dbPath);
+
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
 }
-const dbPath = path.join(dataDir, 'kartoteka.sqlite');
 const db = new Database(dbPath);
 
 db.pragma('journal_mode = WAL');
