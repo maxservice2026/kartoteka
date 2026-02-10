@@ -441,10 +441,27 @@ function renderSettingsInputs() {
     .join('');
   dom.worker.innerHTML = workerOptions;
   dom.genWorker.innerHTML = workerOptions;
+  applyDefaultWorker(dom.worker);
+  applyDefaultWorker(dom.genWorker);
 
   dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
     input.addEventListener('change', updatePricePreview);
   });
+}
+
+function getDefaultWorkerId() {
+  const userId = state.auth.user?.id;
+  if (!userId) return '';
+  const exists = state.settings.workers.some((worker) => worker.id === userId);
+  return exists ? userId : '';
+}
+
+function applyDefaultWorker(selectEl) {
+  if (!selectEl) return;
+  const workerId = getDefaultWorkerId();
+  if (workerId) {
+    selectEl.value = workerId;
+  }
 }
 
 function renderServiceButtons(autoSelect = false) {
@@ -578,7 +595,7 @@ function resetVisitFields() {
   dom.paymentMethod.value = 'cash';
   dom.visitNote.value = '';
   dom.visitDate.value = todayLocal();
-  dom.worker.value = '';
+  dom.worker.value = getDefaultWorkerId();
   dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
     input.checked = false;
   });
@@ -590,7 +607,7 @@ function resetVisitFields() {
   dom.genSelect3.value = '';
   dom.genPrice.value = '';
   dom.genDate.value = todayLocal();
-  dom.genWorker.value = '';
+  dom.genWorker.value = getDefaultWorkerId();
   dom.genPaymentMethod.value = 'cash';
   dom.genNote.value = '';
   updatePricePreview();
@@ -1141,6 +1158,107 @@ function settingsSectionTemplate({
   `;
 }
 
+async function openServiceDetailModal(serviceId) {
+  const service = state.settings.services.find((item) => item.id === serviceId);
+  if (!service) return;
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>${service.name}</h2>
+        <div class="meta">Nastavení vybrané služby.</div>
+      </div>
+      <div class="actions-row">
+        <button class="ghost" id="backToSettings">Zpět</button>
+        <button class="ghost" id="closeModal">Zavřít</button>
+      </div>
+    </div>
+    <div class="modal-grid" id="serviceSettingsGrid">
+      <div class="settings-section" data-service-edit>
+        <div class="panel-header">
+          <div>
+            <h3>Základní údaje</h3>
+            <div class="meta">Název a typ formuláře.</div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Název</label>
+            <input id="serviceEditName" type="text" />
+          </div>
+          <div class="field">
+            <label>Formulář</label>
+            <select id="serviceEditForm">
+              <option value="cosmetic">Kosmetika (detailní)</option>
+              <option value="generic">Obecný</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="primary" id="serviceSave">Uložit službu</button>
+        </div>
+      </div>
+      ${settingsSectionTemplate({
+        title: 'Typy pleti',
+        subtitle: 'Používá se v kartě klientky.',
+        formId: 'skin',
+        listId: 'skinList',
+        fields: [
+          '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Citlivá" /></div>'
+        ]
+      })}
+      ${settingsSectionTemplate({
+        title: 'Typy ošetření',
+        subtitle: 'Název, cena a poznámka.',
+        formId: 'treatments',
+        listId: 'treatmentList',
+        fields: [
+          '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
+          '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>',
+          '<div class="field"><label>Poznámka</label><input type="text" data-field="note" /></div>'
+        ]
+      })}
+      ${settingsSectionTemplate({
+        title: 'Příplatky',
+        subtitle: 'Položky k ošetření.',
+        formId: 'addons',
+        listId: 'addonList',
+        fields: [
+          '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
+          '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>'
+        ]
+      })}
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+  document.getElementById('backToSettings').addEventListener('click', () => {
+    openSettingsModal().catch(() => {});
+  });
+
+  const nameInput = document.getElementById('serviceEditName');
+  const formSelect = document.getElementById('serviceEditForm');
+  nameInput.value = service.name || '';
+  formSelect.value = service.form_type || 'generic';
+
+  document.getElementById('serviceSave').addEventListener('click', async () => {
+    const payload = {
+      name: nameInput.value.trim(),
+      form_type: formSelect.value
+    };
+    if (!payload.name) {
+      alert('Vyplň název služby.');
+      return;
+    }
+    await api.put(`/api/services/${service.id}`, payload);
+    await loadSettings();
+    await openServiceDetailModal(service.id);
+  });
+
+  renderSettingsLists();
+  wireSettingsForms();
+}
+
 async function openSettingsModal() {
   if (state.auth.user?.role === 'admin') {
     await loadUsers();
@@ -1150,7 +1268,7 @@ async function openSettingsModal() {
     <div class="modal-header">
       <div>
         <h2>Nastavení</h2>
-        <div class="meta">Správa služeb, typů pleti, ošetření, příplatků a uživatelů.</div>
+        <div class="meta">Správa služeb a uživatelů.</div>
       </div>
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
@@ -1169,36 +1287,6 @@ async function openSettingsModal() {
       fields: [
         '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
         '<div class="field"><label>Formulář</label><select data-field="form_type"><option value="cosmetic">Kosmetika (detailní)</option><option value="generic">Obecný</option></select></div>'
-      ]
-    }),
-    settingsSectionTemplate({
-      title: 'Typy pleti',
-      subtitle: 'Používá se v kartě klientky.',
-      formId: 'skin',
-      listId: 'skinList',
-      fields: [
-        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Citlivá" /></div>'
-      ]
-    }),
-    settingsSectionTemplate({
-      title: 'Typy ošetření',
-      subtitle: 'Název, cena a poznámka.',
-      formId: 'treatments',
-      listId: 'treatmentList',
-      fields: [
-        '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
-        '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>',
-        '<div class="field"><label>Poznámka</label><input type="text" data-field="note" /></div>'
-      ]
-    }),
-    settingsSectionTemplate({
-      title: 'Příplatky',
-      subtitle: 'Položky k ošetření.',
-      formId: 'addons',
-      listId: 'addonList',
-      fields: [
-        '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
-        '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>'
       ]
     })
   ];
@@ -1238,19 +1326,25 @@ function renderSettingsLists() {
   }
 
   const skinList = document.getElementById('skinList');
-  skinList.innerHTML = state.settings.skinTypes
-    .map((item) => settingsItemTemplate(item, '', 'skin'))
-    .join('');
+  if (skinList) {
+    skinList.innerHTML = state.settings.skinTypes
+      .map((item) => settingsItemTemplate(item, '', 'skin'))
+      .join('');
+  }
 
   const treatmentList = document.getElementById('treatmentList');
-  treatmentList.innerHTML = state.settings.treatments
-    .map((item) => settingsItemTemplate(item, [formatCzk(item.price), item.note].filter(Boolean).join(' • '), 'treatments'))
-    .join('');
+  if (treatmentList) {
+    treatmentList.innerHTML = state.settings.treatments
+      .map((item) => settingsItemTemplate(item, [formatCzk(item.price), item.note].filter(Boolean).join(' • '), 'treatments'))
+      .join('');
+  }
 
   const addonList = document.getElementById('addonList');
-  addonList.innerHTML = state.settings.addons
-    .map((item) => settingsItemTemplate(item, formatCzk(item.price), 'addons'))
-    .join('');
+  if (addonList) {
+    addonList.innerHTML = state.settings.addons
+      .map((item) => settingsItemTemplate(item, formatCzk(item.price), 'addons'))
+      .join('');
+  }
 
   const userList = document.getElementById('userList');
   if (userList) {
@@ -1262,6 +1356,8 @@ function renderSettingsLists() {
   document.querySelectorAll('.settings-item button[data-action="edit"]').forEach((button) => {
     if (button.dataset.section === 'users') {
       button.addEventListener('click', () => startEditUser(button.dataset.id));
+    } else if (button.dataset.section === 'services') {
+      button.addEventListener('click', () => openServiceDetailModal(button.dataset.id));
     } else {
       button.addEventListener('click', () => startEditSetting(button.dataset.section, button.dataset.id));
     }
@@ -1329,6 +1425,7 @@ function wireSettingsForms() {
 
   Object.entries(sections).forEach(([key, config]) => {
     const form = document.querySelector(`[data-form="${key}"]`);
+    if (!form) return;
     form.dataset.editing = '';
 
     const saveButton = form.querySelector('button[data-action="save"]');
