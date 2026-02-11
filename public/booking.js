@@ -43,9 +43,10 @@ async function fetchServices() {
   dom.services.innerHTML = state.services
     .map(
       (service) => `
-        <label class="service-pill">
+        <label class="service-pill" data-service-id="${service.id}">
           <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
-          <span>${service.name} (${service.duration_minutes || 30} minut)</span>
+          <span class="service-pill-name">${service.name}</span>
+          <span class="service-pill-duration">${service.duration_minutes || 30} min</span>
         </label>
       `
     )
@@ -65,6 +66,10 @@ function syncSelectedServices() {
   state.selectedServiceIds = Array.from(document.querySelectorAll('.public-service-checkbox:checked')).map(
     (input) => input.value
   );
+  document.querySelectorAll('.service-pill').forEach((pill) => {
+    const serviceId = pill.dataset.serviceId;
+    pill.classList.toggle('active', state.selectedServiceIds.includes(serviceId));
+  });
 
   const selected = state.services.filter((service) => state.selectedServiceIds.includes(service.id));
   const total = selected.reduce((sum, service) => sum + Math.max(30, Number(service.duration_minutes) || 30), 0);
@@ -72,7 +77,7 @@ function syncSelectedServices() {
 
   dom.servicesHint.classList.toggle('hidden', state.selectedServiceIds.length > 0);
   dom.durationHint.textContent = state.selectedServiceIds.length
-    ? `Celková délka: ${total} minut`
+    ? `Vybráno: ${state.selectedServiceIds.length} • Celková délka: ${total} minut`
     : '';
 }
 

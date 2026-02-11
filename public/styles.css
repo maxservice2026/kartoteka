@@ -338,7 +338,7 @@ button.primary:hover {
   margin-bottom: 6px;
 }
 
-.field input,
+.field input:not([type='checkbox']):not([type='radio']),
 .field select,
 .field textarea {
   width: 100%;
@@ -350,25 +350,43 @@ button.primary:hover {
 }
 
 .service-grid {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .service-pill {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 7px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 999px;
   background: #fff;
   cursor: pointer;
-  font-weight: 500;
+  font-size: 13px;
+  line-height: 1.1;
+  user-select: none;
 }
 
-.service-pill input {
-  margin: 0;
+.service-pill input[type='checkbox'] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.service-pill.active {
+  border-color: #1b4fd8;
+  background: rgba(27, 79, 216, 0.1);
+}
+
+.service-pill-name {
+  font-weight: 600;
+}
+
+.service-pill-duration {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .field-row {
