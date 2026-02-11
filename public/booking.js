@@ -155,8 +155,6 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     button.className = 'ghost slot-button';
     if (slot.reserved) {
       button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`;
-    } else if (state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) {
-      button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status buffer">Pauza</span></span>`;
     } else {
       button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>`;
     }
@@ -172,7 +170,7 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
       button.classList.add('is-start');
     }
     button.addEventListener('click', () => {
-      if (slot.reserved) return;
+      if (slot.reserved || state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) return;
       document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
       button.classList.add('active');
       state.selectedSlot = {

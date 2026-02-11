@@ -609,6 +609,12 @@ button.primary:hover {
   background: rgba(148, 148, 148, 0.08);
 }
 
+.slot-button.is-buffer {
+  border-style: dashed;
+  color: #9b9b9b;
+  background: rgba(148, 148, 148, 0.08);
+}
+
 .slot-status {
   display: inline-flex;
   margin-left: 8px;
