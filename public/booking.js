@@ -1,7 +1,7 @@
 const dom = {
   services: document.getElementById('publicServices'),
   durationHint: document.getElementById('publicDurationHint'),
-  date: document.getElementById('publicDate'),
+  selectedDate: document.getElementById('publicSelectedDate'),
   dateMap: document.getElementById('publicDateMap'),
   slots: document.getElementById('publicSlots'),
   slotsHint: document.getElementById('publicSlotsHint'),
@@ -17,6 +17,7 @@ const state = {
   services: [],
   selectedServiceIds: [],
   selectedSlot: null,
+  selectedDate: '',
   duration: 0,
   blockedStarts: new Set(),
   dateMapYear: null,
@@ -90,8 +91,14 @@ function monthLabel(year, month) {
   return `${names[month - 1]} ${year}`;
 }
 
-function setDateMapMonthFromInput() {
-  const [year, month] = (dom.date.value || '').split('-').map(Number);
+function formatDateDisplay(dateStr) {
+  const [year, month, day] = (dateStr || '').split('-');
+  if (!year || !month || !day) return '';
+  return `${day}.${month}.${year}`;
+}
+
+function setDateMapMonthFromSelection() {
+  const [year, month] = (state.selectedDate || '').split('-').map(Number);
   if (!year || !month) return;
   state.dateMapYear = year;
   state.dateMapMonth = month;
@@ -99,7 +106,7 @@ function setDateMapMonthFromInput() {
 
 function shiftDateMapMonth(delta) {
   if (!state.dateMapYear || !state.dateMapMonth) {
-    setDateMapMonthFromInput();
+    setDateMapMonthFromSelection();
   }
   let year = state.dateMapYear;
   let month = state.dateMapMonth + delta;
@@ -115,13 +122,15 @@ function shiftDateMapMonth(delta) {
 }
 
 function renderDateMap(days) {
-  if (!state.selectedServiceIds.length || !state.dateMapYear || !state.dateMapMonth) {
+  if (!state.dateMapYear || !state.dateMapMonth) {
     dom.dateMap.classList.add('hidden');
     dom.dateMap.innerHTML = '';
+    dom.selectedDate.textContent = '';
     return;
   }
+  dom.selectedDate.textContent = state.selectedDate ? `Vybrané datum: ${formatDateDisplay(state.selectedDate)}` : '';
   const available = new Set(days || []);
-  const [selectedYear, selectedMonth, selectedDay] = (dom.date.value || '').split('-').map(Number);
+  const [selectedYear, selectedMonth, selectedDay] = (state.selectedDate || '').split('-').map(Number);
   const selectedIsCurrentMonth = selectedYear === state.dateMapYear && selectedMonth === state.dateMapMonth;
   const lastDay = new Date(state.dateMapYear, state.dateMapMonth, 0).getDate();
   const dayButtons = [];
@@ -129,7 +138,7 @@ function renderDateMap(days) {
     const isAvailable = available.has(day);
     const isSelected = selectedIsCurrentMonth && selectedDay === day;
     dayButtons.push(
-      `<button type="button" class="date-availability-day${isAvailable ? ' available' : ''}${isSelected ? ' selected' : ''}" data-day="${day}" ${isAvailable ? '' : 'disabled'}>${day}</button>`
+      `<button type="button" class="date-availability-day${isAvailable ? ' available' : ''}${isSelected ? ' selected' : ''}" data-day="${day}">${day}</button>`
     );
   }
   dom.dateMap.innerHTML = `
@@ -148,23 +157,22 @@ function renderDateMap(days) {
       await loadDateMap();
     });
   });
-  dom.dateMap.querySelectorAll('.date-availability-day.available').forEach((button) => {
+  dom.dateMap.querySelectorAll('.date-availability-day').forEach((button) => {
     button.addEventListener('click', async () => {
       const day = Number(button.dataset.day);
-      dom.date.value = `${state.dateMapYear}-${String(state.dateMapMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      state.selectedDate = `${state.dateMapYear}-${String(state.dateMapMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       await loadSlots();
-      await loadDateMap();
     });
   });
 }
 
 async function loadDateMap() {
+  if (!state.dateMapYear || !state.dateMapMonth) {
+    setDateMapMonthFromSelection();
+  }
   if (!state.selectedServiceIds.length) {
     renderDateMap([]);
     return;
-  }
-  if (!state.dateMapYear || !state.dateMapMonth) {
-    setDateMapMonthFromInput();
   }
   const params = new URLSearchParams({
     year: String(state.dateMapYear),
@@ -298,11 +306,11 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
 
 async function loadSlots() {
   const serviceIds = state.selectedServiceIds;
-  const date = dom.date.value;
+  const date = state.selectedDate;
   dom.submit.disabled = true;
   state.selectedSlot = null;
   if (!serviceIds.length || !date) {
-    renderSlots([], [], 'Zvol alespoň jednu službu a datum.');
+    renderSlots([], [], 'Zvol alespoň jednu službu a datum v kalendáři.');
     await loadDateMap();
     return;
   }
@@ -339,7 +347,7 @@ async function submitReservation() {
   }
   const payload = {
     service_ids: state.selectedServiceIds,
-    date: dom.date.value,
+    date: state.selectedDate,
     time: state.selectedSlot?.time,
     worker_id: state.selectedSlot?.worker_id,
     client_name: dom.name.value.trim(),
@@ -374,15 +382,10 @@ async function submitReservation() {
 }
 
 async function init() {
-  dom.date.value = todayLocal();
-  setDateMapMonthFromInput();
+  state.selectedDate = todayLocal();
+  setDateMapMonthFromSelection();
   await fetchServices();
   await loadSlots();
-
-  dom.date.addEventListener('change', async () => {
-    setDateMapMonthFromInput();
-    await loadSlots();
-  });
   dom.submit.addEventListener('click', submitReservation);
 }
 

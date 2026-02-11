@@ -444,7 +444,9 @@ button.primary:hover {
 
 .date-availability-day.selected {
   border-color: #1b4fd8;
-  box-shadow: inset 0 0 0 1px #1b4fd8;
+  background: #1b4fd8;
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(27, 79, 216, 0.22);
 }
 
 .field-row {
