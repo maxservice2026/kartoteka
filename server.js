@@ -610,14 +610,32 @@ app.get('/api/public/availability', async (req, res) => {
     return res.status(400).json({ error: 'Neplatné datum.' });
   }
 
-  let duration = 30;
-  if (req.query.service_id) {
-    const service = await db.get('SELECT duration_minutes FROM services WHERE id = ? AND active = 1', [
-      req.query.service_id
-    ]);
-    if (!service) return res.status(400).json({ error: 'Služba není platná.' });
-    duration = toInt(service.duration_minutes, 30);
+  const serviceIds = [];
+  if (req.query.service_ids) {
+    String(req.query.service_ids)
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .forEach((id) => serviceIds.push(id));
+  } else if (req.query.service_id) {
+    serviceIds.push(String(req.query.service_id).trim());
   }
+  const uniqueServiceIds = Array.from(new Set(serviceIds));
+
+  if (!uniqueServiceIds.length) {
+    return res.status(400).json({ error: 'Vyberte alespoň jednu službu.' });
+  }
+
+  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
+  const serviceRows = await db.all(
+    `SELECT id, duration_minutes FROM services WHERE active = 1 AND id IN (${placeholders})`,
+    uniqueServiceIds
+  );
+  if (serviceRows.length !== uniqueServiceIds.length) {
+    return res.status(400).json({ error: 'Některá služba není platná.' });
+  }
+  const durationById = new Map(serviceRows.map((row) => [row.id, Math.max(30, toInt(row.duration_minutes, 30))]));
+  const duration = uniqueServiceIds.reduce((sum, id) => sum + (durationById.get(id) || 30), 0);
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
   const slotList = timeSlots();
   const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
@@ -786,7 +804,12 @@ app.get('/api/public/availability', async (req, res) => {
 
 app.post('/api/public/reservations', async (req, res) => {
   const payload = req.body || {};
-  const serviceId = payload.service_id;
+  const serviceIds = Array.isArray(payload.service_ids)
+    ? payload.service_ids.map((id) => String(id).trim()).filter(Boolean)
+    : payload.service_id
+      ? [String(payload.service_id).trim()]
+      : [];
+  const uniqueServiceIds = Array.from(new Set(serviceIds));
   const workerId = payload.worker_id;
   const date = toDateOnly(payload.date);
   const timeSlot = (payload.time || '').trim();
@@ -795,13 +818,23 @@ app.post('/api/public/reservations', async (req, res) => {
   const email = (payload.email || '').trim();
   const note = (payload.note || '').trim();
 
-  if (!serviceId || !workerId || !date || !timeSlot || !clientName) {
-    return res.status(400).json({ error: 'Vyplňte službu, termín a jméno.' });
+  if (!uniqueServiceIds.length || !workerId || !date || !timeSlot || !clientName) {
+    return res.status(400).json({ error: 'Vyplňte služby, termín a jméno.' });
   }
 
-  const service = await db.get('SELECT id, duration_minutes FROM services WHERE id = ? AND active = 1', [serviceId]);
-  if (!service) return res.status(400).json({ error: 'Služba není platná.' });
-  const duration = Math.max(30, toInt(service.duration_minutes, 30));
+  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
+  const serviceRows = await db.all(
+    `SELECT id, name, duration_minutes FROM services WHERE active = 1 AND id IN (${placeholders})`,
+    uniqueServiceIds
+  );
+  if (serviceRows.length !== uniqueServiceIds.length) return res.status(400).json({ error: 'Služba není platná.' });
+  const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
+  const duration = uniqueServiceIds.reduce(
+    (sum, id) => sum + Math.max(30, toInt(serviceById.get(id)?.duration_minutes, 30)),
+    0
+  );
+  const serviceNames = uniqueServiceIds.map((id) => serviceById.get(id)?.name).filter(Boolean);
+  const primaryServiceId = uniqueServiceIds[0];
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
   const slotList = timeSlots();
   const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
@@ -869,6 +902,11 @@ app.post('/api/public/reservations', async (req, res) => {
     }
   }
 
+  const finalNote =
+    serviceNames.length > 1
+      ? `[Služby: ${serviceNames.join(', ')}]${note ? ` ${note}` : ''}`
+      : note || null;
+
   await db.run(
     `INSERT INTO reservations (id, date, time_slot, service_id, worker_id, duration_minutes, client_name, phone, email, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -876,13 +914,13 @@ app.post('/api/public/reservations', async (req, res) => {
       newId(),
       date,
       timeSlot,
-      serviceId,
+      primaryServiceId,
       workerId,
       duration,
       clientName,
       phone || null,
       email || null,
-      note || null,
+      finalNote,
       nowIso()
     ]
   );

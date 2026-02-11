@@ -1,5 +1,7 @@
 const dom = {
-  service: document.getElementById('publicService'),
+  services: document.getElementById('publicServices'),
+  servicesHint: document.getElementById('publicServicesHint'),
+  durationHint: document.getElementById('publicDurationHint'),
   date: document.getElementById('publicDate'),
   slots: document.getElementById('publicSlots'),
   slotsHint: document.getElementById('publicSlotsHint'),
@@ -13,8 +15,9 @@ const dom = {
 
 const state = {
   services: [],
+  selectedServiceIds: [],
   selectedSlot: null,
-  duration: 30,
+  duration: 0,
   blockedStarts: new Set()
 };
 
@@ -37,14 +40,40 @@ async function fetchServices() {
   const response = await fetch('/api/public/services');
   const data = await response.json();
   state.services = data.services || [];
-  dom.service.innerHTML =
-    '<option value="">Vyber službu</option>' +
-    state.services
-      .map(
-        (service) =>
-          `<option value="${service.id}" data-duration="${service.duration_minutes || 30}">${service.name} (${service.duration_minutes || 30} minut)</option>`
-      )
-      .join('');
+  dom.services.innerHTML = state.services
+    .map(
+      (service) => `
+        <label class="service-pill">
+          <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
+          <span>${service.name} (${service.duration_minutes || 30} minut)</span>
+        </label>
+      `
+    )
+    .join('');
+
+  document.querySelectorAll('.public-service-checkbox').forEach((input) => {
+    input.addEventListener('change', () => {
+      syncSelectedServices();
+      loadSlots();
+    });
+  });
+
+  syncSelectedServices();
+}
+
+function syncSelectedServices() {
+  state.selectedServiceIds = Array.from(document.querySelectorAll('.public-service-checkbox:checked')).map(
+    (input) => input.value
+  );
+
+  const selected = state.services.filter((service) => state.selectedServiceIds.includes(service.id));
+  const total = selected.reduce((sum, service) => sum + Math.max(30, Number(service.duration_minutes) || 30), 0);
+  state.duration = total;
+
+  dom.servicesHint.classList.toggle('hidden', state.selectedServiceIds.length > 0);
+  dom.durationHint.textContent = state.selectedServiceIds.length
+    ? `Celková délka: ${total} minut`
+    : '';
 }
 
 function timeSlots() {
@@ -124,13 +153,20 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'ghost slot-button';
-    button.innerHTML = slot.reserved
-      ? `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`
-      : `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>`;
+    if (slot.reserved) {
+      button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`;
+    } else if (state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) {
+      button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status buffer">Pauza</span></span>`;
+    } else {
+      button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>`;
+    }
     button.dataset.workerId = slot.worker_id;
     button.dataset.time = slot.time_slot;
     if (slot.reserved) {
       button.classList.add('is-reserved');
+      button.disabled = true;
+    } else if (state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) {
+      button.classList.add('is-buffer');
       button.disabled = true;
     } else if (startByWorker.get(slot.worker_id)?.has(slot.time_slot)) {
       button.classList.add('is-start');
@@ -157,18 +193,25 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
 }
 
 async function loadSlots() {
-  const serviceId = dom.service.value;
+  const serviceIds = state.selectedServiceIds;
   const date = dom.date.value;
   dom.submit.disabled = true;
   state.selectedSlot = null;
-  if (!serviceId || !date) {
-    renderSlots([], [], 'Zvol službu a datum.');
+  if (!serviceIds.length || !date) {
+    renderSlots([], [], 'Zvol alespoň jednu službu a datum.');
     return;
   }
 
-  const response = await fetch(`/api/public/availability?date=${encodeURIComponent(date)}&service_id=${serviceId}`);
+  const response = await fetch(
+    `/api/public/availability?date=${encodeURIComponent(date)}&service_ids=${encodeURIComponent(serviceIds.join(','))}`
+  );
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    renderSlots([], [], data.error || 'Nepodařilo se načíst dostupnost.');
+    return;
+  }
   const data = await response.json();
-  state.duration = Number(data.duration) || 30;
+  state.duration = Number(data.duration) || state.duration || 30;
   state.blockedStarts = new Set(
     (data.blocked_starts || []).map((item) => `${item.worker_id}:${item.time_slot}`)
   );
@@ -189,7 +232,7 @@ async function submitReservation() {
     return;
   }
   const payload = {
-    service_id: dom.service.value,
+    service_ids: state.selectedServiceIds,
     date: dom.date.value,
     time: state.selectedSlot?.time,
     worker_id: state.selectedSlot?.worker_id,
@@ -199,8 +242,8 @@ async function submitReservation() {
     note: dom.note.value.trim()
   };
 
-  if (!payload.service_id || !payload.date || !payload.time || !payload.worker_id || !payload.client_name) {
-    setResult('Doplň službu, termín a jméno.', true);
+  if (!payload.service_ids?.length || !payload.date || !payload.time || !payload.worker_id || !payload.client_name) {
+    setResult('Doplň služby, termín a jméno.', true);
     return;
   }
 
@@ -229,11 +272,6 @@ async function init() {
   await fetchServices();
   await loadSlots();
 
-  dom.service.addEventListener('change', () => {
-    const selected = dom.service.options[dom.service.selectedIndex];
-    state.duration = Number(selected?.dataset?.duration || 30);
-    loadSlots();
-  });
   dom.date.addEventListener('change', loadSlots);
   dom.submit.addEventListener('click', submitReservation);
 }
