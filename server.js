@@ -400,6 +400,7 @@ async function initDb() {
       title TEXT NOT NULL,
       amount INTEGER NOT NULL,
       vat_rate INTEGER NOT NULL DEFAULT 0,
+      recurring_type TEXT NOT NULL DEFAULT 'none',
       note TEXT,
       worker_id TEXT,
       created_at TEXT NOT NULL
@@ -434,11 +435,13 @@ async function initDb() {
   await ensureColumn('visits', 'service_data', 'TEXT');
   await ensureColumn('expenses', 'vat_rate', 'INTEGER DEFAULT 0');
   await ensureColumn('expenses', 'worker_id', 'TEXT');
+  await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
 
   await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
+  await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
 }
 
 async function seedDefaults() {
@@ -1409,6 +1412,10 @@ app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
   if (!amount) return res.status(400).json({ error: 'amount is required' });
 
   const vatRate = Math.max(0, toInt(payload.vat_rate, 0));
+  const recurringTypeRaw = (payload.recurring_type || 'none').toString().trim().toLowerCase();
+  const recurringType = ['none', 'weekly', 'monthly', 'quarterly', 'yearly'].includes(recurringTypeRaw)
+    ? recurringTypeRaw
+    : 'none';
   const workerId = req.user.id;
   const worker = await db.get('SELECT id, full_name FROM users WHERE id = ? AND active = 1', [workerId]);
   if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
@@ -1416,34 +1423,99 @@ app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
 
   const id = newId();
   await db.run(
-    `INSERT INTO expenses (id, date, title, amount, vat_rate, note, worker_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses (id, date, title, amount, vat_rate, recurring_type, note, worker_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ,
-    [id, toDateOnly(payload.date), title, amount, vatRate, payload.note || null, workerId, nowIso()]
+    [id, toDateOnly(payload.date), title, amount, vatRate, recurringType, payload.note || null, workerId, nowIso()]
   );
 
   res.json({ id });
 });
 
+function recurringOccurrenceDate(startDate, recurringType, index) {
+  if (recurringType === 'weekly') {
+    return new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + index * 7);
+  }
+  const monthStep = recurringType === 'monthly' ? 1 : recurringType === 'quarterly' ? 3 : recurringType === 'yearly' ? 12 : 0;
+  if (!monthStep) return new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+  const targetMonth = startDate.getMonth() + index * monthStep;
+  const year = startDate.getFullYear() + Math.floor(targetMonth / 12);
+  const month = ((targetMonth % 12) + 12) % 12;
+  const maxDay = new Date(year, month + 1, 0).getDate();
+  const day = Math.min(startDate.getDate(), maxDay);
+  return new Date(year, month, day);
+}
+
+function parseIsoDate(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr || '')) return null;
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function expandExpenses(rows, fromDateStr, toDateStr) {
+  const fromDate = parseIsoDate(fromDateStr);
+  const toDate = parseIsoDate(toDateStr);
+  if (!fromDate || !toDate) return [];
+
+  const expanded = [];
+  rows.forEach((row) => {
+    const recurringTypeRaw = (row.recurring_type || 'none').toString().toLowerCase();
+    const recurringType = ['none', 'weekly', 'monthly', 'quarterly', 'yearly'].includes(recurringTypeRaw)
+      ? recurringTypeRaw
+      : 'none';
+    const startDate = parseIsoDate(row.date);
+    if (!startDate) return;
+
+    if (recurringType === 'none') {
+      if (startDate >= fromDate && startDate <= toDate) {
+        expanded.push({ ...row, date: toLocalDateString(startDate) });
+      }
+      return;
+    }
+
+    let index = 0;
+    let occ = recurringOccurrenceDate(startDate, recurringType, index);
+    let guard = 0;
+    while (occ < fromDate && guard < 4000) {
+      index += 1;
+      occ = recurringOccurrenceDate(startDate, recurringType, index);
+      guard += 1;
+    }
+
+    while (occ <= toDate && guard < 8000) {
+      expanded.push({ ...row, date: toLocalDateString(occ) });
+      index += 1;
+      occ = recurringOccurrenceDate(startDate, recurringType, index);
+      guard += 1;
+    }
+  });
+
+  expanded.sort((a, b) => {
+    if (a.date === b.date) {
+      return (b.created_at || '').localeCompare(a.created_at || '');
+    }
+    return b.date.localeCompare(a.date);
+  });
+  return expanded;
+}
+
 app.get('/api/expenses', requireEconomyAccess, async (req, res) => {
   const from = toDateOnly(req.query.from || null);
   const to = toDateOnly(req.query.to || null);
   const workerFilter = req.user.id;
-  const where = ['e.date BETWEEN ? AND ?'];
-  const params = [from, to];
-  where.push('e.worker_id = ?');
-  params.push(workerFilter);
   const rows = await db.all(
     `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
      FROM expenses e
      LEFT JOIN users u ON e.worker_id = u.id
      LEFT JOIN workers w ON e.worker_id = w.id
-     WHERE ${where.join(' AND ')}
+     WHERE e.worker_id = ? AND e.date <= ?
      ORDER BY e.date DESC, e.created_at DESC`
     ,
-    params
+    [workerFilter, to]
   );
-  res.json(rows);
+  res.json(expandExpenses(rows, from, to));
 });
 
 app.delete('/api/expenses/:id', requireEconomyAccess, async (req, res) => {
@@ -1515,14 +1587,13 @@ app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res)
     myVisitsParams
   );
 
-  const myExpensesWhere = ['e.date BETWEEN ? AND ?', 'e.worker_id = ?'];
-  const myExpensesParams = [range.from, range.to, myWorkerId];
-  const myExpenses = await db.all(
-    `SELECT e.amount
+  const myExpensesRaw = await db.all(
+    `SELECT e.*
      FROM expenses e
-     WHERE ${myExpensesWhere.join(' AND ')}`,
-    myExpensesParams
+     WHERE e.worker_id = ? AND e.date <= ?`,
+    [myWorkerId, range.to]
   );
+  const myExpenses = expandExpenses(myExpensesRaw, range.from, range.to);
 
   const incomeTotal = myVisits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const expenseTotal = myExpenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
@@ -1554,16 +1625,17 @@ app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res)
     visitsParams
   );
 
-  const expenses = await db.all(
+  const expensesRaw = await db.all(
     `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
      FROM expenses e
      LEFT JOIN users u ON e.worker_id = u.id
      LEFT JOIN workers w ON e.worker_id = w.id
-     WHERE e.date BETWEEN ? AND ? AND e.worker_id = ?
+     WHERE e.worker_id = ? AND e.date <= ?
      ORDER BY e.date DESC, e.created_at DESC`
     ,
-    [range.from, range.to, myWorkerId]
+    [myWorkerId, range.to]
   );
+  const expenses = expandExpenses(expensesRaw, range.from, range.to);
 
   let byWorker = [];
   if (role === 'admin') {

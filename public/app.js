@@ -159,6 +159,17 @@ function formatCzk(value) {
   return `${safe.toLocaleString('cs-CZ')} Kč`;
 }
 
+function recurringTypeLabel(value) {
+  const map = {
+    none: 'Jednorázově',
+    weekly: 'Týdenně',
+    monthly: 'Měsíčně',
+    quarterly: 'Kvartálně',
+    yearly: 'Ročně'
+  };
+  return map[(value || 'none').toString().toLowerCase()] || 'Jednorázově';
+}
+
 function debounce(fn, delay = 200) {
   let timer;
   return (...args) => {
@@ -1185,7 +1196,7 @@ async function openEconomyModal() {
             <input type="text" id="expenseTitle" placeholder="Např. materiál" />
           </div>
           <div class="field">
-            <label>Částka</label>
+            <label>Hodnota výdaje</label>
             <input type="number" id="expenseAmount" min="0" step="1" />
           </div>
         </div>
@@ -1193,6 +1204,16 @@ async function openEconomyModal() {
           <div class="field">
             <label>DPH (%)</label>
             <input type="number" id="expenseVat" min="0" step="1" value="0" />
+          </div>
+          <div class="field">
+            <label>Opakování</label>
+            <select id="expenseRecurring">
+              <option value="none">Jednorázově</option>
+              <option value="weekly">Týdenní</option>
+              <option value="monthly">Měsíční</option>
+              <option value="quarterly">Kvartální</option>
+              <option value="yearly">Roční</option>
+            </select>
           </div>
         </div>
         <div class="field-row">
@@ -1386,7 +1407,7 @@ async function openEconomyModal() {
       expenses.innerHTML = data.expenses
         .map((expense) => `
           <div class="settings-item">
-            <span>${expense.date} • ${expense.title}${expense.worker_name ? ` • ${expense.worker_name}` : ''}${expense.vat_rate ? ` • DPH ${expense.vat_rate}%` : ''}</span>
+            <span>${expense.date} • ${expense.title}${expense.worker_name ? ` • ${expense.worker_name}` : ''}${expense.vat_rate ? ` • DPH ${expense.vat_rate}%` : ''}${expense.recurring_type && expense.recurring_type !== 'none' ? ` • ${recurringTypeLabel(expense.recurring_type)}` : ''}</span>
             <span>${formatCzk(expense.amount)}</span>
           </div>
         `)
@@ -1425,16 +1446,19 @@ async function openEconomyModal() {
       return;
     }
     const vatRate = document.getElementById('expenseVat').value || '0';
+    const recurringType = document.getElementById('expenseRecurring').value || 'none';
     await api.post('/api/expenses', {
       title,
       amount,
       vat_rate: vatRate,
+      recurring_type: recurringType,
       date: document.getElementById('expenseDate').value,
       note: document.getElementById('expenseNote').value.trim()
     });
     document.getElementById('expenseTitle').value = '';
     document.getElementById('expenseAmount').value = '';
     document.getElementById('expenseVat').value = '0';
+    document.getElementById('expenseRecurring').value = 'none';
     document.getElementById('expenseNote').value = '';
     await loadEconomy();
     await loadSummary();
