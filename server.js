@@ -706,6 +706,24 @@ app.get('/api/public/availability', async (req, res) => {
   });
 
   const available = [];
+  const enforceNoHalfGap = duration > 30;
+
+  const violatesGap = (workerId, startIndex, endIndex) => {
+    const list = reservationsByWorker.get(workerId) || [];
+    return list.some((res) => {
+      if (startIndex < res.endIndex && endIndex > res.startIndex) {
+        return true;
+      }
+      if (!enforceNoHalfGap) return false;
+      if (startIndex >= res.endIndex && startIndex - res.endIndex === 1) {
+        return true;
+      }
+      if (res.startIndex >= endIndex && res.startIndex - endIndex === 1) {
+        return true;
+      }
+      return false;
+    });
+  };
 
   availableByWorker.forEach((value, workerId) => {
     const reservedSlots = reservedByWorker.get(workerId) || new Set();
@@ -724,6 +742,9 @@ app.get('/api/public/availability', async (req, res) => {
           break;
         }
       }
+      if (ok && violatesGap(workerId, startIndex, startIndex + requiredSlots)) {
+        ok = false;
+      }
       if (ok) {
         available.push({
           time_slot: slot,
@@ -733,6 +754,18 @@ app.get('/api/public/availability', async (req, res) => {
       }
     });
   });
+
+  const blockedStarts = [];
+  if (enforceNoHalfGap) {
+    baseSlots.forEach((slot) => {
+      if (slot.reserved) return;
+      const startIndex = slotIndex[slot.time_slot];
+      if (startIndex === undefined) return;
+      if (violatesGap(slot.worker_id, startIndex, startIndex + requiredSlots)) {
+        blockedStarts.push({ worker_id: slot.worker_id, time_slot: slot.time_slot });
+      }
+    });
+  }
 
   available.sort((a, b) => {
     if (a.time_slot === b.time_slot) {
@@ -748,7 +781,7 @@ app.get('/api/public/availability', async (req, res) => {
     return a.time_slot.localeCompare(b.time_slot);
   });
 
-  res.json({ slots: available, base_slots: baseSlots, duration, blocked_starts: [] });
+  res.json({ slots: available, base_slots: baseSlots, duration, blocked_starts: blockedStarts });
 });
 
 app.post('/api/public/reservations', async (req, res) => {
@@ -809,6 +842,25 @@ app.post('/api/public/reservations', async (req, res) => {
     row._startIndex = idx;
     row._endIndex = endIndex;
   });
+
+  if (duration > 30) {
+    const endIndex = startIndex + requiredSlots;
+    const violatesGap = existingReservations.some((row) => {
+      if (startIndex < row._endIndex && endIndex > row._startIndex) {
+        return true;
+      }
+      if (startIndex >= row._endIndex && startIndex - row._endIndex === 1) {
+        return true;
+      }
+      if (row._startIndex >= endIndex && row._startIndex - endIndex === 1) {
+        return true;
+      }
+      return false;
+    });
+    if (violatesGap) {
+      return res.status(409).json({ error: 'Termín není dostupný.' });
+    }
+  }
 
   for (let i = 0; i < requiredSlots; i += 1) {
     const slot = slotList[startIndex + i];
