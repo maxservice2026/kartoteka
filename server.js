@@ -1474,6 +1474,27 @@ function economyRange(req) {
   return { from: from || fromAuto, to: to || toAuto };
 }
 
+function lastSixMonthsFrom(toDateStr) {
+  const end = new Date(`${toDateStr}T00:00:00`);
+  if (Number.isNaN(end.getTime())) return [];
+  const anchor = new Date(end.getFullYear(), end.getMonth(), 1);
+  const items = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const monthDate = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+    const year = monthDate.getFullYear();
+    const month = monthDate.getMonth() + 1;
+    const from = `${year}-${pad2(month)}-01`;
+    const to = toLocalDateString(new Date(year, month, 0));
+    items.push({
+      key: `${year}-${pad2(month)}`,
+      label: `${pad2(month)}/${year}`,
+      from,
+      to
+    });
+  }
+  return items;
+}
+
 app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res) => {
   const range = economyRange(req);
   const role = req.user.role;
@@ -1586,6 +1607,30 @@ app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res)
     totalsAllIncome = visitsAll.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   }
 
+  const monthlyIncomeLast6 = [];
+  const monthWindows = lastSixMonthsFrom(range.to);
+  for (const monthItem of monthWindows) {
+    const monthWhere = ['date BETWEEN ? AND ?'];
+    const monthParams = [monthItem.from, monthItem.to];
+    if (workerFilter) {
+      monthWhere.push('worker_id = ?');
+      monthParams.push(workerFilter);
+    }
+    if (serviceFilter) {
+      monthWhere.push('service_id = ?');
+      monthParams.push(serviceFilter);
+    }
+    const monthRows = await db.all(
+      `SELECT total FROM visits WHERE ${monthWhere.join(' AND ')}`,
+      monthParams
+    );
+    monthlyIncomeLast6.push({
+      key: monthItem.key,
+      label: monthItem.label,
+      total: monthRows.reduce((sum, row) => sum + toInt(row.total, 0), 0)
+    });
+  }
+
   res.json({
     range,
     totals: {
@@ -1593,6 +1638,7 @@ app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res)
       expenses: expenseTotal,
       profit: incomeTotal - expenseTotal
     },
+    monthly_income_last6: monthlyIncomeLast6,
     totals_all_income: totalsAllIncome,
     visits,
     expenses,

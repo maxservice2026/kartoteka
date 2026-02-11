@@ -518,6 +518,117 @@ button.primary:hover {
   color: #2563eb;
 }
 
+.eco-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.eco-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+  display: grid;
+  gap: 8px;
+}
+
+.eco-card-title {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.eco-donut-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.eco-donut {
+  width: 120px;
+  height: 120px;
+  transform: rotate(-90deg);
+}
+
+.eco-donut circle {
+  fill: none;
+  stroke-width: 12;
+}
+
+.eco-donut-track {
+  stroke: #ece7df;
+}
+
+.eco-donut-income {
+  stroke: #1f9a4c;
+}
+
+.eco-donut-expenses {
+  stroke: #d0422b;
+}
+
+.eco-donut-center {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+}
+
+.eco-donut-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.eco-donut-value {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.eco-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.eco-trend.up {
+  color: #1f9a4c;
+}
+
+.eco-trend.down {
+  color: #d0422b;
+}
+
+.eco-trend.flat {
+  color: #64748b;
+}
+
+.eco-trend-arrow {
+  font-size: 28px;
+}
+
+.eco-sparkline {
+  width: 100%;
+  height: 44px;
+}
+
+.eco-sparkline polyline {
+  fill: none;
+  stroke: #1b4fd8;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.eco-trend-months {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .history {
   margin-top: 18px;
 }
@@ -832,6 +943,10 @@ button.primary:hover {
   .topbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .eco-overview {
+    grid-template-columns: 1fr;
   }
 
   .actions-row {

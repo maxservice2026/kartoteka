@@ -1264,6 +1264,76 @@ async function openEconomyModal() {
     document.getElementById('ecoTo').value = toLocalDateString(end);
   }
 
+  function economyDonutHtml(totals) {
+    const income = Math.max(0, Number(totals?.income) || 0);
+    const expenses = Math.max(0, Number(totals?.expenses) || 0);
+    const basis = income + expenses;
+    const incomePct = basis > 0 ? (income / basis) * 100 : 0;
+    const expensesPct = basis > 0 ? (expenses / basis) * 100 : 0;
+    const radius = 44;
+    const circumference = 2 * Math.PI * radius;
+    const incomeLen = (incomePct / 100) * circumference;
+    const expensesLen = (expensesPct / 100) * circumference;
+    const profit = (Number(totals?.profit) || 0).toLocaleString('cs-CZ');
+
+    return `
+      <div class="eco-card">
+        <div class="eco-card-title">Moje ekonomika</div>
+        <div class="eco-donut-wrap">
+          <svg class="eco-donut" viewBox="0 0 120 120" aria-hidden="true">
+            <circle class="eco-donut-track" cx="60" cy="60" r="${radius}" />
+            <circle class="eco-donut-income" cx="60" cy="60" r="${radius}"
+              style="stroke-dasharray:${incomeLen} ${circumference};stroke-dashoffset:0;" />
+            <circle class="eco-donut-expenses" cx="60" cy="60" r="${radius}"
+              style="stroke-dasharray:${expensesLen} ${circumference};stroke-dashoffset:-${incomeLen};" />
+          </svg>
+          <div class="eco-donut-center">
+            <div class="eco-donut-label">Zisk</div>
+            <div class="eco-donut-value">${profit} Kč</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function trendHtml(rows) {
+    const series = Array.isArray(rows) ? rows : [];
+    const values = series.map((item) => Number(item.total) || 0);
+    const first = values[0] || 0;
+    const last = values[values.length - 1] || 0;
+    const diff = last - first;
+    const pct = first > 0 ? (diff / first) * 100 : (last > 0 ? 100 : 0);
+    const arrow = diff > 0 ? '↗' : diff < 0 ? '↘' : '→';
+    const trendClass = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
+
+    const min = values.length ? Math.min(...values) : 0;
+    const max = values.length ? Math.max(...values) : 0;
+    const span = Math.max(1, max - min);
+    const points = values
+      .map((value, index) => {
+        const x = values.length <= 1 ? 0 : Math.round((index / (values.length - 1)) * 180);
+        const y = 40 - Math.round(((value - min) / span) * 34);
+        return `${x},${y}`;
+      })
+      .join(' ');
+
+    return `
+      <div class="eco-card">
+        <div class="eco-card-title">Tržba 6 měsíců</div>
+        <div class="eco-trend ${trendClass}">
+          <span class="eco-trend-arrow">${arrow}</span>
+          <span>${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>
+        </div>
+        <svg class="eco-sparkline" viewBox="0 0 180 44" aria-hidden="true">
+          <polyline points="${points}" />
+        </svg>
+        <div class="eco-trend-months">
+          ${(series[0]?.label || '')} - ${(series[series.length - 1]?.label || '')}
+        </div>
+      </div>
+    `;
+  }
+
   async function loadEconomy() {
     const from = document.getElementById('ecoFrom').value;
     const to = document.getElementById('ecoTo').value;
@@ -1275,8 +1345,11 @@ async function openEconomyModal() {
     const data = await api.get(`/api/economy?${params.toString()}`);
     const summary = document.getElementById('ecoSummary');
     let summaryHtml = `
+      <div class="eco-overview">
+        ${economyDonutHtml(data.totals)}
+        ${trendHtml(data.monthly_income_last6)}
+      </div>
       <div class="stats">
-        <div><strong>Moje ekonomika</strong></div>
         <div>Tržba: <strong class="stat-income">${formatCzk(data.totals.income)}</strong></div>
         <div>Výdaje: <strong class="stat-expenses">${formatCzk(data.totals.expenses)}</strong></div>
         <div>Zisk: <strong class="stat-profit">${formatCzk(data.totals.profit)}</strong></div>
