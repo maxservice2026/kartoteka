@@ -603,39 +603,46 @@ app.get('/api/public/services', async (req, res) => {
   res.json({ services });
 });
 
-app.get('/api/public/availability', async (req, res) => {
-  const date = toDateOnly(req.query.date);
-  const day = weekdayIndex(date);
-  if (day === null) {
-    return res.status(400).json({ error: 'Neplatné datum.' });
-  }
-
-  const serviceIds = [];
-  if (req.query.service_ids) {
-    String(req.query.service_ids)
+function parseSelectedServiceIds(rawServiceIds, rawServiceId) {
+  const ids = [];
+  if (rawServiceIds) {
+    String(rawServiceIds)
       .split(',')
       .map((id) => id.trim())
       .filter(Boolean)
-      .forEach((id) => serviceIds.push(id));
-  } else if (req.query.service_id) {
-    serviceIds.push(String(req.query.service_id).trim());
+      .forEach((id) => ids.push(id));
+  } else if (rawServiceId) {
+    ids.push(String(rawServiceId).trim());
   }
-  const uniqueServiceIds = Array.from(new Set(serviceIds));
+  return Array.from(new Set(ids));
+}
 
-  if (!uniqueServiceIds.length) {
-    return res.status(400).json({ error: 'Vyberte alespoň jednu službu.' });
+async function resolveSelectedServices(serviceIds) {
+  if (!serviceIds.length) {
+    return { error: 'Vyberte alespoň jednu službu.', status: 400 };
   }
-
-  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
+  const placeholders = serviceIds.map(() => '?').join(', ');
   const serviceRows = await db.all(
-    `SELECT id, duration_minutes FROM services WHERE active = 1 AND id IN (${placeholders})`,
-    uniqueServiceIds
+    `SELECT id, name, duration_minutes FROM services WHERE active = 1 AND id IN (${placeholders})`,
+    serviceIds
   );
-  if (serviceRows.length !== uniqueServiceIds.length) {
-    return res.status(400).json({ error: 'Některá služba není platná.' });
+  if (serviceRows.length !== serviceIds.length) {
+    return { error: 'Některá služba není platná.', status: 400 };
   }
-  const durationById = new Map(serviceRows.map((row) => [row.id, Math.max(30, toInt(row.duration_minutes, 30))]));
-  const duration = uniqueServiceIds.reduce((sum, id) => sum + (durationById.get(id) || 30), 0);
+  const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
+  const duration = serviceIds.reduce(
+    (sum, id) => sum + Math.max(30, toInt(serviceById.get(id)?.duration_minutes, 30)),
+    0
+  );
+  return { serviceRows, serviceById, duration };
+}
+
+async function calculatePublicAvailability(date, duration) {
+  const day = weekdayIndex(date);
+  if (day === null) {
+    return { error: 'Neplatné datum.', status: 400 };
+  }
+
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
   const slotList = timeSlots();
   const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
@@ -799,7 +806,45 @@ app.get('/api/public/availability', async (req, res) => {
     return a.time_slot.localeCompare(b.time_slot);
   });
 
-  res.json({ slots: available, base_slots: baseSlots, duration, blocked_starts: blockedStarts });
+  return { slots: available, base_slots: baseSlots, blocked_starts: blockedStarts };
+}
+
+app.get('/api/public/availability', async (req, res) => {
+  const date = toDateOnly(req.query.date);
+  const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
+  const selected = await resolveSelectedServices(serviceIds);
+  if (selected.error) {
+    return res.status(selected.status || 400).json({ error: selected.error });
+  }
+  const availability = await calculatePublicAvailability(date, selected.duration);
+  if (availability.error) {
+    return res.status(availability.status || 400).json({ error: availability.error });
+  }
+  res.json({ ...availability, duration: selected.duration });
+});
+
+app.get('/api/public/availability-days', async (req, res) => {
+  const year = toInt(req.query.year, new Date().getFullYear());
+  const month = toInt(req.query.month, new Date().getMonth() + 1);
+  if (month < 1 || month > 12) {
+    return res.status(400).json({ error: 'Neplatný měsíc.' });
+  }
+  const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
+  const selected = await resolveSelectedServices(serviceIds);
+  if (selected.error) {
+    return res.status(selected.status || 400).json({ error: selected.error });
+  }
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const days = [];
+  for (let day = 1; day <= lastDay; day += 1) {
+    const date = `${year}-${pad2(month)}-${pad2(day)}`;
+    const availability = await calculatePublicAvailability(date, selected.duration);
+    if (!availability.error && availability.slots.length > 0) {
+      days.push(day);
+    }
+  }
+  res.json({ year, month, days });
 });
 
 app.post('/api/public/reservations', async (req, res) => {
@@ -822,17 +867,11 @@ app.post('/api/public/reservations', async (req, res) => {
     return res.status(400).json({ error: 'Vyplňte služby, termín a jméno.' });
   }
 
-  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
-  const serviceRows = await db.all(
-    `SELECT id, name, duration_minutes FROM services WHERE active = 1 AND id IN (${placeholders})`,
-    uniqueServiceIds
-  );
-  if (serviceRows.length !== uniqueServiceIds.length) return res.status(400).json({ error: 'Služba není platná.' });
-  const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
-  const duration = uniqueServiceIds.reduce(
-    (sum, id) => sum + Math.max(30, toInt(serviceById.get(id)?.duration_minutes, 30)),
-    0
-  );
+  const selected = await resolveSelectedServices(uniqueServiceIds);
+  if (selected.error) {
+    return res.status(selected.status || 400).json({ error: selected.error });
+  }
+  const { serviceById, duration } = selected;
   const serviceNames = uniqueServiceIds.map((id) => serviceById.get(id)?.name).filter(Boolean);
   const primaryServiceId = uniqueServiceIds[0];
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
