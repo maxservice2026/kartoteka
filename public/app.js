@@ -75,9 +75,18 @@ const state = {
   visits: [],
   users: [],
   clones: [],
+  featureAccess: {
+    tenant_id: null,
+    catalog: [],
+    plan: 'basic',
+    overrides: {},
+    effective: {}
+  },
+  featureMatrix: {
+    features: [],
+    tenants: []
+  },
   selectedServiceId: null,
-  proAllowed: false,
-  proPin: '',
   auth: {
     token: null,
     user: null,
@@ -128,9 +137,6 @@ const api = {
     const token = state.auth.token || localStorage.getItem('kartoteka_token');
     if (token) {
       headers.Authorization = `Bearer ${token}`;
-    }
-    if (state.proPin) {
-      headers['x-pro-pin'] = state.proPin;
     }
 
     let response;
@@ -285,39 +291,30 @@ function updateUserUi() {
 
   const isAdmin = state.auth.user?.role === 'admin';
   const isWorker = state.auth.user?.role === 'worker';
+  const isReception = state.auth.user?.role === 'reception';
   dom.btnSettings.classList.toggle('hidden', !isAdmin);
-  const isLogged = !!state.auth.user;
-  const canEconomy = isAdmin || isWorker;
-  dom.btnEconomy.classList.toggle('hidden', !canEconomy);
+  const canEconomy = (isAdmin || isWorker) && isFeatureEnabled('economy');
+  const canCalendar = !!state.auth.user && isFeatureEnabled('calendar');
+  const canBilling = !!state.auth.user && isFeatureEnabled('billing');
+  const canNotifications = !!state.auth.user && isFeatureEnabled('notifications');
+
+  dom.btnEconomy.classList.toggle('hidden', !canEconomy || isReception);
+  dom.btnCalendar.classList.toggle('hidden', !canCalendar);
+  dom.btnBilling.classList.toggle('hidden', !canBilling);
+  dom.btnNotifications.classList.toggle('hidden', !canNotifications);
   dom.summaryStats.classList.toggle('hidden', !isAdmin);
   dom.btnLogout.classList.toggle('hidden', !state.auth.user);
-  applyProAccess();
-}
-
-function applyProAccess() {
-  const allow = !!state.proAllowed;
-  const proButtons = [dom.btnEconomy, dom.btnCalendar, dom.btnBilling, dom.btnNotifications];
-  proButtons.forEach((button) => {
+  [dom.btnEconomy, dom.btnCalendar, dom.btnBilling, dom.btnNotifications].forEach((button) => {
     if (!button) return;
-    button.classList.toggle('pro-locked', !allow);
+    button.classList.remove('pro-locked');
   });
 }
 
-async function tryUnlockProAccess() {
-  const pin = prompt('Zadej PIN pro odemceni PRO funkci:');
-  if (!pin) return false;
-  state.proPin = pin.trim();
-  const allowed = await loadProAccess();
-  if (!allowed) {
-    alert('PIN není správný.');
-    state.proPin = '';
-    applyProAccess();
-    return false;
-  }
-  return true;
+function isFeatureEnabled(featureKey) {
+  return !!state.featureAccess?.effective?.[featureKey];
 }
 
-function openProPreviewModal(featureKey, onUnlock) {
+function openProPreviewModal(featureKey) {
   const preview = PRO_PREVIEW_MAP[featureKey] || PRO_PREVIEW_MAP.economy;
   const gallery = (preview.images || [])
     .map(
@@ -341,30 +338,18 @@ function openProPreviewModal(featureKey, onUnlock) {
     <div class="modal-grid">
       <div class="preview-note">Klient vidí pouze obrázkový náhled. Funkce jsou aktivní jen v PRO verzi.</div>
       <div class="preview-gallery">${gallery}</div>
-      <div class="actions-row">
-        <button class="ghost" id="unlockProAccess">Odemknout PRO (PIN)</button>
-      </div>
     </div>
   `);
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
-  const unlockBtn = document.getElementById('unlockProAccess');
-  if (unlockBtn) {
-    unlockBtn.addEventListener('click', async () => {
-      const unlocked = await tryUnlockProAccess();
-      if (!unlocked) return;
-      closeModal();
-      await onUnlock();
-    });
-  }
 }
 
 async function runProFeature(featureKey, openFeature) {
-  if (state.proAllowed) {
+  if (isFeatureEnabled(featureKey)) {
     await openFeature();
     return;
   }
-  openProPreviewModal(featureKey, openFeature);
+  openProPreviewModal(featureKey);
 }
 
 function hideAuthScreen() {
@@ -448,25 +433,48 @@ function showSetupScreen() {
 }
 
 async function onAuthenticated() {
+  await loadFeatureAccess();
   updateUserUi();
-  await loadProAccess();
   await loadSettings();
   await loadClones();
+  await loadFeatureMatrix();
   await loadClients();
   await loadSummary();
   clearSelection();
   updatePricePreview();
 }
 
-async function loadProAccess() {
-  try {
-    const data = await api.get('/api/pro-access');
-    state.proAllowed = !!data.allowed;
-  } catch (err) {
-    state.proAllowed = false;
+async function loadFeatureAccess() {
+  if (!state.auth.user) {
+    state.featureAccess = {
+      tenant_id: null,
+      catalog: [],
+      plan: 'basic',
+      overrides: {},
+      effective: {}
+    };
+    return;
   }
-  applyProAccess();
-  return state.proAllowed;
+  const data = await api.get('/api/features');
+  state.featureAccess = {
+    tenant_id: data.tenant_id || null,
+    catalog: data.catalog || [],
+    plan: data.plan || 'basic',
+    overrides: data.overrides || {},
+    effective: data.effective || {}
+  };
+}
+
+async function loadFeatureMatrix() {
+  if (state.auth.user?.role !== 'admin' || !state.auth.user?.is_superadmin) {
+    state.featureMatrix = { features: [], tenants: [] };
+    return;
+  }
+  const data = await api.get('/api/admin/feature-matrix');
+  state.featureMatrix = {
+    features: data.features || [],
+    tenants: data.tenants || []
+  };
 }
 
 async function bootstrapAuth() {
@@ -1672,6 +1680,113 @@ function settingsSectionTemplate({
   `;
 }
 
+function featureMatrixSectionTemplate() {
+  return `
+    <div class="settings-section">
+      <div class="panel-header">
+        <div>
+          <h3>Feature Matrix klonů</h3>
+          <div class="meta">Balíček + výjimky. Přepínač určuje, zda je funkce aktivní pro daný klon.</div>
+        </div>
+      </div>
+      <div id="featureMatrixBox"></div>
+    </div>
+  `;
+}
+
+function buildFeatureMatrixHtml() {
+  const features = state.featureMatrix.features || [];
+  const tenants = state.featureMatrix.tenants || [];
+  if (!features.length || !tenants.length) {
+    return '<div class="hint">Zatím nejsou dostupná data pro feature matrix.</div>';
+  }
+
+  const header = features.map((feature) => `<th>${feature.label}</th>`).join('');
+  const rows = tenants
+    .map((tenant) => {
+      const planLabel = clonePlanLabel(tenant.plan);
+      const statusLabel = cloneStatusLabel(tenant.status);
+      const featureCells = features
+        .map((feature) => {
+          const enabled = !!tenant.features?.[feature.key];
+          const hasOverride = tenant.overrides?.[feature.key] !== null && tenant.overrides?.[feature.key] !== undefined;
+          return `
+            <td>
+              <label class="matrix-toggle${hasOverride ? ' override' : ''}">
+                <input
+                  type="checkbox"
+                  data-action="feature-toggle"
+                  data-tenant-id="${tenant.tenant_id}"
+                  data-feature-key="${feature.key}"
+                  ${enabled ? 'checked' : ''}
+                />
+                <span>${enabled ? 'Zapnuto' : 'Vypnuto'}</span>
+              </label>
+            </td>
+          `;
+        })
+        .join('');
+
+      return `
+        <tr>
+          <td class="tenant-cell">
+            <div class="tenant-name">${tenant.name}${tenant.is_default ? ' (hlavní tenant)' : ''}</div>
+            <div class="tenant-meta">${tenant.slug}${tenant.domain ? ` • ${tenant.domain}` : ''}</div>
+          </td>
+          <td>${planLabel}</td>
+          <td>${statusLabel}</td>
+          ${featureCells}
+        </tr>
+      `;
+    })
+    .join('');
+
+  return `
+    <div class="feature-matrix-wrap">
+      <table class="feature-matrix">
+        <thead>
+          <tr>
+            <th>Klon / tenant</th>
+            <th>Balíček</th>
+            <th>Stav</th>
+            ${header}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderFeatureMatrix() {
+  const box = document.getElementById('featureMatrixBox');
+  if (!box) return;
+  box.innerHTML = buildFeatureMatrixHtml();
+  box.querySelectorAll('input[data-action="feature-toggle"]').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const tenantId = input.dataset.tenantId;
+      const featureKey = input.dataset.featureKey;
+      const enabled = input.checked;
+      input.disabled = true;
+      try {
+        await api.put('/api/admin/feature-matrix', {
+          tenant_id: tenantId,
+          feature_key: featureKey,
+          enabled
+        });
+        await loadFeatureMatrix();
+        renderFeatureMatrix();
+        await loadFeatureAccess();
+        updateUserUi();
+      } finally {
+        input.disabled = false;
+      }
+    });
+  });
+}
+
 async function openServiceDetailModal(serviceId) {
   const service = state.settings.services.find((item) => item.id === serviceId);
   if (!service) return;
@@ -1787,6 +1902,7 @@ async function openSettingsModal() {
     await loadUsers();
     if (state.auth.user?.is_superadmin) {
       await loadClones();
+      await loadFeatureMatrix();
     }
   }
 
@@ -1852,6 +1968,7 @@ async function openSettingsModal() {
           ]
         })
       );
+      sections.push(featureMatrixSectionTemplate());
     }
   }
 
@@ -1907,6 +2024,8 @@ function renderSettingsLists() {
       .map((clone) => cloneItemTemplate(clone))
       .join('');
   }
+
+  renderFeatureMatrix();
 
   document.querySelectorAll('.settings-item button[data-action="edit"]').forEach((button) => {
     if (button.dataset.section === 'users') {

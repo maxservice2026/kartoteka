@@ -8,14 +8,16 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
-const DEFAULT_PRO_ALLOWED_IPS = ['46.135.1.58', '34.160.111.145'];
-const PRO_PIN = process.env.PRO_PIN || '224234234';
 const DEFAULT_TENANT_SLUG = normalizeSlug(process.env.DEFAULT_TENANT_SLUG || 'default') || 'default';
 const DEFAULT_TENANT_NAME = (process.env.DEFAULT_TENANT_NAME || 'PRETTY VISAGE 2').toString().trim();
-const PRO_ALLOWED_IPS = (process.env.PRO_ALLOWED_IPS || DEFAULT_PRO_ALLOWED_IPS.join(','))
-  .split(',')
-  .map((ip) => ip.trim())
-  .filter(Boolean);
+const DEFAULT_TENANT_PLAN = (process.env.DEFAULT_TENANT_PLAN || 'enterprise').toString().trim().toLowerCase();
+const FEATURE_DEFINITIONS = [
+  { key: 'economy', label: 'Ekonomika', defaults: { basic: false, pro: true, enterprise: true } },
+  { key: 'calendar', label: 'Kalendář', defaults: { basic: false, pro: true, enterprise: true } },
+  { key: 'billing', label: 'Fakturace', defaults: { basic: false, pro: true, enterprise: true } },
+  { key: 'notifications', label: 'Notifikace', defaults: { basic: false, pro: true, enterprise: true } }
+];
+const FEATURE_KEY_SET = new Set(FEATURE_DEFINITIONS.map((feature) => feature.key));
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
 
@@ -104,33 +106,6 @@ if (usePostgres) {
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-
-function normalizeIp(ip) {
-  if (!ip) return '';
-  if (ip.startsWith('::ffff:')) return ip.slice(7);
-  return ip;
-}
-
-function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (forwarded) {
-    return normalizeIp(forwarded.split(',')[0].trim());
-  }
-  return normalizeIp(req.socket?.remoteAddress || '');
-}
-
-function isProAllowed(req) {
-  if (!PRO_ALLOWED_IPS.length) return true;
-  const ip = getClientIp(req);
-  if (!ip) return false;
-  if (ip === '127.0.0.1' || ip === '::1') return true;
-  return PRO_ALLOWED_IPS.includes(ip);
-}
-
-function isProPinValid(req) {
-  const pin = (req.headers['x-pro-pin'] || '').toString().trim();
-  return Boolean(pin) && pin === PRO_PIN;
-}
 
 app.use(['/api', '/rezervace'], async (req, res, next) => {
   try {
@@ -428,13 +403,6 @@ function requireEconomyAccess(req, res, next) {
   return next();
 }
 
-function requireProAccess(req, res, next) {
-  if (!isProAllowed(req) && !isProPinValid(req)) {
-    return res.status(403).json({ error: 'PRO přístup pouze pro povolené zařízení.' });
-  }
-  return next();
-}
-
 async function initDb() {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS skin_types (
@@ -487,7 +455,7 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       tenant_id TEXT,
-      username TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL,
       full_name TEXT NOT NULL,
       role TEXT NOT NULL,
       is_superadmin INTEGER NOT NULL DEFAULT 0,
@@ -591,6 +559,14 @@ async function initDb() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS tenant_features (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      feature_key TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   await ensureColumn('clients', 'cream', 'TEXT');
@@ -624,6 +600,15 @@ async function initDb() {
   await ensureColumn('clones', 'template_json', 'TEXT');
   await ensureColumn('clones', 'active', 'INTEGER DEFAULT 1');
   await ensureColumn('clones', 'updated_at', 'TEXT');
+  await ensureColumn('tenant_features', 'tenant_id', 'TEXT');
+  await ensureColumn('tenant_features', 'feature_key', 'TEXT');
+  await ensureColumn('tenant_features', 'enabled', 'INTEGER DEFAULT 0');
+  await ensureColumn('tenant_features', 'updated_at', 'TEXT');
+
+  if (db.isPostgres) {
+    await db.exec('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key');
+  }
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_tenant_username_idx ON users (tenant_id, username)');
 
   await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
@@ -650,6 +635,11 @@ async function initDb() {
   await db.run("UPDATE clones SET status = 'draft' WHERE status IS NULL");
   await db.run('UPDATE clones SET active = 1 WHERE active IS NULL');
   await db.run('UPDATE clones SET updated_at = created_at WHERE updated_at IS NULL');
+  await db.run('DELETE FROM tenant_features WHERE tenant_id IS NULL OR tenant_id = ?', ['']);
+  await db.run('DELETE FROM tenant_features WHERE feature_key IS NULL OR feature_key = ?', ['']);
+  await db.run('UPDATE tenant_features SET updated_at = created_at WHERE updated_at IS NULL');
+
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenant_features_tenant_feature_key_idx ON tenant_features (tenant_id, feature_key)');
 
   const cloneRows = await db.all('SELECT id, name, slug, domain, tenant_id FROM clones WHERE active = 1');
   for (const clone of cloneRows) {
@@ -751,6 +741,21 @@ const requireSuperAdmin = (req, res, next) => {
   }
   return next();
 };
+const requireFeature = (featureKey) => async (req, res, next) => {
+  if (!FEATURE_KEY_SET.has(featureKey)) {
+    return res.status(500).json({ error: 'Neznámá feature.' });
+  }
+  try {
+    const access = await getTenantFeatureAccess(req.tenant.id);
+    if (!access.effective[featureKey]) {
+      return res.status(403).json({ error: 'Tato funkce není pro tento klon aktivní.' });
+    }
+    req.featureAccess = access;
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+};
 
 async function hasUsers(tenantId) {
   const row = await db.get('SELECT COUNT(*) as count FROM users WHERE active = 1 AND tenant_id = ?', [tenantId]);
@@ -797,6 +802,54 @@ function normalizeClonePlan(value) {
   const raw = (value || '').toString().trim().toLowerCase();
   if (raw === 'pro' || raw === 'enterprise') return raw;
   return 'basic';
+}
+
+function featureCatalogView() {
+  return FEATURE_DEFINITIONS.map((feature) => ({
+    key: feature.key,
+    label: feature.label
+  }));
+}
+
+function defaultFeatureForPlan(plan, featureKey) {
+  const normalizedPlan = normalizeClonePlan(plan);
+  const feature = FEATURE_DEFINITIONS.find((item) => item.key === featureKey);
+  if (!feature) return false;
+  return Boolean(feature.defaults[normalizedPlan]);
+}
+
+async function getTenantPlan(tenantId) {
+  if (!tenantId) return normalizeClonePlan(DEFAULT_TENANT_PLAN);
+  if (tenantId === defaultTenantId) return normalizeClonePlan(DEFAULT_TENANT_PLAN);
+  const clone = await db.get(
+    'SELECT plan FROM clones WHERE tenant_id = ? AND active = 1 ORDER BY updated_at DESC LIMIT 1',
+    [tenantId]
+  );
+  return normalizeClonePlan(clone?.plan || 'basic');
+}
+
+async function getTenantFeatureAccess(tenantId, tenantPlan = null) {
+  const plan = normalizeClonePlan(tenantPlan || (await getTenantPlan(tenantId)));
+  const rows = await db.all(
+    'SELECT feature_key, enabled FROM tenant_features WHERE tenant_id = ?',
+    [tenantId]
+  );
+  const overrides = {};
+  rows.forEach((row) => {
+    if (!FEATURE_KEY_SET.has(row.feature_key)) return;
+    overrides[row.feature_key] = toInt(row.enabled, 0) === 1;
+  });
+
+  const effective = {};
+  FEATURE_DEFINITIONS.forEach((feature) => {
+    if (Object.prototype.hasOwnProperty.call(overrides, feature.key)) {
+      effective[feature.key] = overrides[feature.key];
+    } else {
+      effective[feature.key] = defaultFeatureForPlan(plan, feature.key);
+    }
+  });
+
+  return { plan, overrides, effective };
 }
 
 function normalizeCloneStatus(value) {
@@ -879,7 +932,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/pro-access', (req, res) => {
-  res.json({ allowed: isProAllowed(req) || isProPinValid(req) });
+  res.json({ allowed: true });
 });
 
 app.get('/api/public/services', async (req, res) => {
@@ -1269,11 +1322,22 @@ app.get('/api/me', (req, res) => {
   res.json({ user: req.user, tenant: req.tenant });
 });
 
+app.get('/api/features', async (req, res) => {
+  const access = await getTenantFeatureAccess(req.tenant.id);
+  res.json({
+    tenant_id: req.tenant.id,
+    catalog: featureCatalogView(),
+    plan: access.plan,
+    overrides: access.overrides,
+    effective: access.effective
+  });
+});
+
 app.get('/api/settings', async (req, res) => {
   res.json(await getSettings(req.tenant.id));
 });
 
-app.get('/api/availability', requireProAccess, async (req, res) => {
+app.get('/api/availability', requireFeature('calendar'), async (req, res) => {
   if (req.user.role === 'reception') {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
   }
@@ -1287,7 +1351,7 @@ app.get('/api/availability', requireProAccess, async (req, res) => {
   res.json({ days, times });
 });
 
-app.post('/api/availability', requireProAccess, async (req, res) => {
+app.post('/api/availability', requireFeature('calendar'), async (req, res) => {
   if (req.user.role === 'reception') {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
   }
@@ -1313,7 +1377,7 @@ app.post('/api/availability', requireProAccess, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/reservations/calendar', requireProAccess, async (req, res) => {
+app.get('/api/reservations/calendar', requireFeature('calendar'), async (req, res) => {
   const year = toInt(req.query.year, new Date().getFullYear());
   const month = toInt(req.query.month, new Date().getMonth() + 1);
   if (month < 1 || month > 12) {
@@ -1337,7 +1401,7 @@ app.get('/api/reservations/calendar', requireProAccess, async (req, res) => {
   res.json({ days });
 });
 
-app.get('/api/reservations', requireProAccess, async (req, res) => {
+app.get('/api/reservations', requireFeature('calendar'), async (req, res) => {
   const year = toInt(req.query.year, new Date().getFullYear());
   const month = toInt(req.query.month, new Date().getMonth() + 1);
   const lastDay = new Date(year, month, 0).getDate();
@@ -1681,6 +1745,107 @@ app.delete('/api/clones/:id', requireSuperAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/admin/feature-matrix', requireSuperAdmin, async (req, res) => {
+  const rows = await db.all(
+    `SELECT t.id as tenant_id,
+            t.name as tenant_name,
+            t.slug as tenant_slug,
+            t.domain as tenant_domain,
+            c.id as clone_id,
+            c.plan as clone_plan,
+            c.status as clone_status
+     FROM tenants t
+     LEFT JOIN clones c ON c.tenant_id = t.id AND c.active = 1
+     WHERE t.active = 1
+     ORDER BY CASE WHEN t.id = ? THEN 0 ELSE 1 END, t.name ASC`,
+    [defaultTenantId]
+  );
+
+  const tenants = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (seen.has(row.tenant_id)) continue;
+    seen.add(row.tenant_id);
+    const plan = row.tenant_id === defaultTenantId
+      ? normalizeClonePlan(DEFAULT_TENANT_PLAN)
+      : normalizeClonePlan(row.clone_plan || 'basic');
+    const access = await getTenantFeatureAccess(row.tenant_id, plan);
+    const defaults = {};
+    FEATURE_DEFINITIONS.forEach((feature) => {
+      defaults[feature.key] = defaultFeatureForPlan(plan, feature.key);
+    });
+    const overrides = {};
+    FEATURE_DEFINITIONS.forEach((feature) => {
+      overrides[feature.key] = Object.prototype.hasOwnProperty.call(access.overrides, feature.key)
+        ? access.overrides[feature.key]
+        : null;
+    });
+
+    tenants.push({
+      tenant_id: row.tenant_id,
+      name: row.tenant_name,
+      slug: row.tenant_slug,
+      domain: row.tenant_domain,
+      is_default: row.tenant_id === defaultTenantId,
+      clone_id: row.clone_id || null,
+      status: row.clone_status || (row.tenant_id === defaultTenantId ? 'active' : 'draft'),
+      plan,
+      defaults,
+      overrides,
+      features: access.effective
+    });
+  }
+
+  res.json({
+    features: featureCatalogView(),
+    tenants
+  });
+});
+
+app.put('/api/admin/feature-matrix', requireSuperAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const tenantId = (payload.tenant_id || '').toString().trim();
+  const featureKey = (payload.feature_key || '').toString().trim();
+  const enabled = payload.enabled;
+
+  if (!tenantId) {
+    return res.status(400).json({ error: 'tenant_id je povinné.' });
+  }
+  if (!FEATURE_KEY_SET.has(featureKey)) {
+    return res.status(400).json({ error: 'Neplatná feature.' });
+  }
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'enabled musí být true/false.' });
+  }
+
+  const tenant = await db.get('SELECT id FROM tenants WHERE id = ? AND active = 1', [tenantId]);
+  if (!tenant) {
+    return res.status(404).json({ error: 'Tenant nenalezen.' });
+  }
+
+  const plan = await getTenantPlan(tenantId);
+  const defaultValue = defaultFeatureForPlan(plan, featureKey);
+
+  await db.run('DELETE FROM tenant_features WHERE tenant_id = ? AND feature_key = ?', [tenantId, featureKey]);
+  if (enabled !== defaultValue) {
+    await db.run(
+      `INSERT INTO tenant_features (id, tenant_id, feature_key, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [newId(), tenantId, featureKey, enabled ? 1 : 0, nowIso(), nowIso()]
+    );
+  }
+
+  const access = await getTenantFeatureAccess(tenantId, plan);
+  res.json({
+    ok: true,
+    tenant_id: tenantId,
+    feature_key: featureKey,
+    enabled: access.effective[featureKey],
+    plan,
+    default_enabled: defaultValue
+  });
+});
+
 app.get('/api/clients', async (req, res) => {
   const search = (req.query.search || '').toString().trim();
   let rows;
@@ -1881,7 +2046,7 @@ app.delete('/api/visits/:id', async (req, res) => {
   res.json({ ok: info.changes > 0 });
 });
 
-app.post('/api/expenses', requireEconomyAccess, async (req, res) => {
+app.post('/api/expenses', requireEconomyAccess, requireFeature('economy'), async (req, res) => {
   const payload = req.body || {};
   const title = (payload.title || '').trim();
   if (!title) return res.status(400).json({ error: 'title is required' });
@@ -1979,7 +2144,7 @@ function expandExpenses(rows, fromDateStr, toDateStr) {
   return expanded;
 }
 
-app.get('/api/expenses', requireEconomyAccess, async (req, res) => {
+app.get('/api/expenses', requireEconomyAccess, requireFeature('economy'), async (req, res) => {
   const from = toDateOnly(req.query.from || null);
   const to = toDateOnly(req.query.to || null);
   const workerFilter = req.user.id;
@@ -1996,7 +2161,7 @@ app.get('/api/expenses', requireEconomyAccess, async (req, res) => {
   res.json(expandExpenses(rows, from, to));
 });
 
-app.delete('/api/expenses/:id', requireEconomyAccess, async (req, res) => {
+app.delete('/api/expenses/:id', requireEconomyAccess, requireFeature('economy'), async (req, res) => {
   if (req.user.role === 'admin') {
     const info = await db.run('DELETE FROM expenses WHERE id = ? AND tenant_id = ?', [req.params.id, req.tenant.id]);
     return res.json({ ok: info.changes > 0 });
@@ -2045,7 +2210,7 @@ function lastSixMonthsFrom(toDateStr) {
   return items;
 }
 
-app.get('/api/economy', requireEconomyAccess, requireProAccess, async (req, res) => {
+app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (req, res) => {
   const range = economyRange(req);
   const role = req.user.role;
   const serviceFilter = req.query.service_id || null;
@@ -2261,6 +2426,8 @@ app.get('/api/summary', async (req, res) => {
 
 app.get('/api/backup', requireSuperAdmin, async (req, res) => {
   const data = {
+    tenants: await db.all('SELECT * FROM tenants'),
+    tenant_features: await db.all('SELECT * FROM tenant_features'),
     skin_types: await db.all('SELECT * FROM skin_types'),
     services: await db.all('SELECT * FROM services'),
     treatments: await db.all('SELECT * FROM treatments'),
@@ -2287,6 +2454,7 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
 
   const { data } = payload;
   const deleteOrder = [
+    'tenant_features',
     'reservations',
     'availability',
     'visits',
@@ -2298,9 +2466,12 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'services',
     'skin_types',
     'expenses',
-    'clones'
+    'clones',
+    'tenants'
   ];
   const insertOrder = [
+    'tenants',
+    'tenant_features',
     'skin_types',
     'services',
     'treatments',
@@ -2335,6 +2506,8 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
       await insertMany(table, data[table] || []);
     }
     await db.exec('COMMIT');
+    const defaultTenant = await getDefaultTenant();
+    defaultTenantId = defaultTenant?.id || defaultTenantId;
     await syncWorkersWithUsers();
     res.json({ ok: true });
   } catch (err) {

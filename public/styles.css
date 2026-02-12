@@ -935,6 +935,73 @@ button.primary:hover {
   font-size: 12px;
 }
 
+.feature-matrix-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.feature-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 860px;
+}
+
+.feature-matrix th,
+.feature-matrix td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  text-align: left;
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+.feature-matrix th {
+  background: #f9f7f3;
+  font-weight: 600;
+}
+
+.feature-matrix tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.tenant-cell {
+  min-width: 220px;
+}
+
+.tenant-name {
+  font-weight: 600;
+}
+
+.tenant-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.matrix-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.matrix-toggle input {
+  margin: 0;
+}
+
+.matrix-toggle.override {
+  border-color: rgba(26, 115, 232, 0.5);
+  background: rgba(26, 115, 232, 0.06);
+}
+
 .preview-note {
   background: #f9f7f3;
   border: 1px solid var(--border);
