@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
   <rect width="1200" height="760" fill="#f5f7fc"/>
   <rect x="32" y="28" width="1136" height="704" rx="24" fill="#ffffff" stroke="#dfe5f2"/>
-  <text x="72" y="92" font-family="Arial, sans-serif" font-size="42" fill="#121826" font-weight="700">Kalendar rezervaci</text>
+  <text x="72" y="92" font-family="Arial, sans-serif" font-size="42" fill="#121826" font-weight="700">Kalendář rezervací</text>
 
   <rect x="72" y="128" width="1056" height="560" rx="18" fill="#fcfdff" stroke="#dfe6f7"/>
-  <text x="104" y="178" font-family="Arial, sans-serif" font-size="34" fill="#172033" font-weight="700">Unor 2026</text>
+  <text x="104" y="178" font-family="Arial, sans-serif" font-size="34" fill="#172033" font-weight="700">Únor 2026</text>
 
   <text x="126" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Po</text>
-  <text x="276" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Ut</text>
+  <text x="276" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Út</text>
   <text x="426" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">St</text>
-  <text x="576" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Ct</text>
+  <text x="576" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Čt</text>
   <text x="726" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Pa</text>
   <text x="876" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">So</text>
   <text x="1026" y="228" font-family="Arial, sans-serif" font-size="20" fill="#64748b">Ne</text>
@@ -28,5 +28,5 @@
   <circle cx="566" cy="526" r="7" fill="#2563eb"/>
 
   <rect x="72" y="616" width="1056" height="72" rx="12" fill="#f1f5ff" stroke="#d8e4ff"/>
-  <text x="100" y="662" font-family="Arial, sans-serif" font-size="24" fill="#355ab8">Modra tecka oznacuje den s rezervaci.</text>
+  <text x="100" y="662" font-family="Arial, sans-serif" font-size="24" fill="#355ab8">Modrá tečka označuje den s rezervací.</text>
 </svg>

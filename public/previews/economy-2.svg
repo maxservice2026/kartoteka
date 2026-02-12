@@ -1,48 +1,48 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
   <rect width="1200" height="760" fill="#f5f7fc"/>
   <rect x="32" y="28" width="1136" height="704" rx="24" fill="#ffffff" stroke="#dfe5f2"/>
-  <text x="72" y="92" font-family="Arial, sans-serif" font-size="40" fill="#121826" font-weight="700">Detail prijmu a vydaju</text>
+  <text x="72" y="92" font-family="Arial, sans-serif" font-size="40" fill="#121826" font-weight="700">Detail příjmů a výdajů</text>
 
   <rect x="72" y="132" width="1056" height="76" rx="12" fill="#f8fafc" stroke="#e2e8f0"/>
-  <text x="104" y="177" font-family="Arial, sans-serif" font-size="24" fill="#334155">Filtr: od 01.01.2026 do 29.02.2026  •  Sluzba: Vse  •  Pracovnik: Vse</text>
+  <text x="104" y="177" font-family="Arial, sans-serif" font-size="24" fill="#334155">Filtr: od 01.01.2026 do 29.02.2026  •  Služba: Vše  •  Pracovník: Vše</text>
 
   <rect x="72" y="236" width="512" height="460" rx="16" fill="#fcfdff" stroke="#dfe6f7"/>
-  <text x="102" y="280" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Prijmy (osetreni)</text>
+  <text x="102" y="280" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Příjmy (ošetření)</text>
 
   <rect x="96" y="304" width="464" height="56" rx="10" fill="#f4f8ff"/>
   <text x="116" y="340" font-family="Arial, sans-serif" font-size="22" fill="#334155">11.02.2026 • Kosmetika • Jana</text>
-  <text x="542" y="340" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">2 200 Kc</text>
+  <text x="542" y="340" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">2 200 Kč</text>
 
   <rect x="96" y="370" width="464" height="56" rx="10" fill="#f4f8ff"/>
   <text x="116" y="406" font-family="Arial, sans-serif" font-size="22" fill="#334155">12.02.2026 • Depilace • Jana</text>
-  <text x="542" y="406" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">1 050 Kc</text>
+  <text x="542" y="406" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">1 050 Kč</text>
 
   <rect x="96" y="436" width="464" height="56" rx="10" fill="#f4f8ff"/>
-  <text x="116" y="472" font-family="Arial, sans-serif" font-size="22" fill="#334155">12.02.2026 • Masaz • Katka</text>
-  <text x="542" y="472" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">1 300 Kc</text>
+  <text x="116" y="472" font-family="Arial, sans-serif" font-size="22" fill="#334155">12.02.2026 • Masáž • Katka</text>
+  <text x="542" y="472" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">1 300 Kč</text>
 
   <rect x="96" y="502" width="464" height="56" rx="10" fill="#f4f8ff"/>
-  <text x="116" y="538" font-family="Arial, sans-serif" font-size="22" fill="#334155">13.02.2026 • Liceni • Jana</text>
-  <text x="542" y="538" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">900 Kc</text>
+  <text x="116" y="538" font-family="Arial, sans-serif" font-size="22" fill="#334155">13.02.2026 • Líčení • Jana</text>
+  <text x="542" y="538" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#138a36" font-weight="700">900 Kč</text>
 
-  <text x="102" y="628" font-family="Arial, sans-serif" font-size="24" fill="#0f172a" font-weight="700">Celkove prijmy:</text>
-  <text x="560" y="628" text-anchor="end" font-family="Arial, sans-serif" font-size="30" fill="#138a36" font-weight="700">5 450 Kc</text>
+  <text x="102" y="628" font-family="Arial, sans-serif" font-size="24" fill="#0f172a" font-weight="700">Celkové příjmy:</text>
+  <text x="560" y="628" text-anchor="end" font-family="Arial, sans-serif" font-size="30" fill="#138a36" font-weight="700">5 450 Kč</text>
 
   <rect x="616" y="236" width="512" height="460" rx="16" fill="#fffcfa" stroke="#f1e1d4"/>
-  <text x="646" y="280" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Vydaje</text>
+  <text x="646" y="280" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Výdaje</text>
 
   <rect x="640" y="304" width="464" height="56" rx="10" fill="#fff5ef"/>
-  <text x="660" y="340" font-family="Arial, sans-serif" font-size="22" fill="#334155">Material  •  DPH 21%</text>
-  <text x="1086" y="340" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">850 Kc</text>
+  <text x="660" y="340" font-family="Arial, sans-serif" font-size="22" fill="#334155">Materiál  •  DPH 21%</text>
+  <text x="1086" y="340" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">850 Kč</text>
 
   <rect x="640" y="370" width="464" height="56" rx="10" fill="#fff5ef"/>
-  <text x="660" y="406" font-family="Arial, sans-serif" font-size="22" fill="#334155">Najem  •  Mesicni</text>
-  <text x="1086" y="406" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">12 000 Kc</text>
+  <text x="660" y="406" font-family="Arial, sans-serif" font-size="22" fill="#334155">Nájem  •  Měsíční</text>
+  <text x="1086" y="406" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">12 000 Kč</text>
 
   <rect x="640" y="436" width="464" height="56" rx="10" fill="#fff5ef"/>
-  <text x="660" y="472" font-family="Arial, sans-serif" font-size="22" fill="#334155">Elektrina  •  Mesicni</text>
-  <text x="1086" y="472" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">1 600 Kc</text>
+  <text x="660" y="472" font-family="Arial, sans-serif" font-size="22" fill="#334155">Elektřina  •  Měsíční</text>
+  <text x="1086" y="472" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#c0392b" font-weight="700">1 600 Kč</text>
 
-  <text x="646" y="628" font-family="Arial, sans-serif" font-size="24" fill="#0f172a" font-weight="700">Celkove vydaje:</text>
-  <text x="1104" y="628" text-anchor="end" font-family="Arial, sans-serif" font-size="30" fill="#c0392b" font-weight="700">14 450 Kc</text>
+  <text x="646" y="628" font-family="Arial, sans-serif" font-size="24" fill="#0f172a" font-weight="700">Celkové výdaje:</text>
+  <text x="1104" y="628" text-anchor="end" font-family="Arial, sans-serif" font-size="30" fill="#c0392b" font-weight="700">14 450 Kč</text>
 </svg>

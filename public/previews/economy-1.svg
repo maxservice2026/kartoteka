@@ -4,16 +4,16 @@
   <text x="72" y="92" font-family="Arial, sans-serif" font-size="42" fill="#121826" font-weight="700">Ekonomika</text>
 
   <rect x="72" y="126" width="336" height="160" rx="16" fill="#f8fbff" stroke="#d9e5fb"/>
-  <text x="98" y="170" font-family="Arial, sans-serif" font-size="26" fill="#1b4fd8" font-weight="700">Prijmy</text>
-  <text x="98" y="226" font-family="Arial, sans-serif" font-size="44" fill="#138a36" font-weight="700">152 480 Kc</text>
+  <text x="98" y="170" font-family="Arial, sans-serif" font-size="26" fill="#1b4fd8" font-weight="700">Příjmy</text>
+  <text x="98" y="226" font-family="Arial, sans-serif" font-size="44" fill="#138a36" font-weight="700">152 480 Kč</text>
 
   <rect x="432" y="126" width="336" height="160" rx="16" fill="#fffaf7" stroke="#f1dfd0"/>
-  <text x="458" y="170" font-family="Arial, sans-serif" font-size="26" fill="#d15a15" font-weight="700">Vydaje</text>
-  <text x="458" y="226" font-family="Arial, sans-serif" font-size="44" fill="#c0392b" font-weight="700">48 920 Kc</text>
+  <text x="458" y="170" font-family="Arial, sans-serif" font-size="26" fill="#d15a15" font-weight="700">Výdaje</text>
+  <text x="458" y="226" font-family="Arial, sans-serif" font-size="44" fill="#c0392b" font-weight="700">48 920 Kč</text>
 
   <rect x="792" y="126" width="336" height="160" rx="16" fill="#f7faff" stroke="#d8e5ff"/>
   <text x="818" y="170" font-family="Arial, sans-serif" font-size="26" fill="#3058c9" font-weight="700">Zisk</text>
-  <text x="818" y="226" font-family="Arial, sans-serif" font-size="44" fill="#2563eb" font-weight="700">103 560 Kc</text>
+  <text x="818" y="226" font-family="Arial, sans-serif" font-size="44" fill="#2563eb" font-weight="700">103 560 Kč</text>
 
   <rect x="72" y="320" width="512" height="360" rx="18" fill="#fcfdff" stroke="#dfe6f7"/>
   <text x="102" y="372" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Moje ekonomika</text>
@@ -24,7 +24,7 @@
   <text x="306" y="548" text-anchor="middle" font-family="Arial, sans-serif" font-size="26" fill="#52607a">zisk</text>
 
   <rect x="616" y="320" width="512" height="360" rx="18" fill="#fcfdff" stroke="#dfe6f7"/>
-  <text x="646" y="372" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Trzba 6 mesicu</text>
+  <text x="646" y="372" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Tržba 6 měsíců</text>
   <polyline points="668,596 738,560 808,574 878,526 948,488 1018,460 1088,428" fill="none" stroke="#2453d8" stroke-width="7"/>
   <circle cx="668" cy="596" r="7" fill="#2453d8"/>
   <circle cx="738" cy="560" r="7" fill="#2453d8"/>
@@ -34,6 +34,6 @@
   <circle cx="1018" cy="460" r="7" fill="#2453d8"/>
   <circle cx="1088" cy="428" r="7" fill="#2453d8"/>
   <line x1="668" y1="620" x2="1088" y2="620" stroke="#d8dfea" stroke-width="2"/>
-  <text x="668" y="654" font-family="Arial, sans-serif" font-size="20" fill="#5f6b82">zari</text>
-  <text x="1088" y="654" text-anchor="end" font-family="Arial, sans-serif" font-size="20" fill="#5f6b82">unor</text>
+  <text x="668" y="654" font-family="Arial, sans-serif" font-size="20" fill="#5f6b82">září</text>
+  <text x="1088" y="654" text-anchor="end" font-family="Arial, sans-serif" font-size="20" fill="#5f6b82">únor</text>
 </svg>

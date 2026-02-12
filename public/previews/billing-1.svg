@@ -4,23 +4,23 @@
   <text x="72" y="92" font-family="Arial, sans-serif" font-size="42" fill="#121826" font-weight="700">Fakturace</text>
 
   <rect x="72" y="128" width="1056" height="78" rx="12" fill="#f8fbff" stroke="#d9e5fb"/>
-  <text x="102" y="176" font-family="Arial, sans-serif" font-size="24" fill="#334155">Vyhledani faktury   •   Stav platby   •   Datum od-do</text>
+  <text x="102" y="176" font-family="Arial, sans-serif" font-size="24" fill="#334155">Vyhledání faktury   •   Stav platby   •   Datum od-do</text>
 
   <rect x="72" y="232" width="1056" height="84" rx="12" fill="#fff8ef" stroke="#f1ddc6"/>
-  <text x="102" y="285" font-family="Arial, sans-serif" font-size="28" fill="#1f2937" font-weight="700">+ Nova faktura</text>
+  <text x="102" y="285" font-family="Arial, sans-serif" font-size="28" fill="#1f2937" font-weight="700">+ Nová faktura</text>
 
   <rect x="72" y="336" width="1056" height="356" rx="16" fill="#fcfdff" stroke="#dfe6f7"/>
-  <text x="102" y="380" font-family="Arial, sans-serif" font-size="28" fill="#172033" font-weight="700">Prehled dokladu</text>
+  <text x="102" y="380" font-family="Arial, sans-serif" font-size="28" fill="#172033" font-weight="700">Přehled dokladů</text>
 
   <rect x="98" y="402" width="1008" height="56" rx="10" fill="#f7faff"/>
-  <text x="118" y="438" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-018 • Jana Novakova • Vystaveno 10.02.2026</text>
-  <text x="1086" y="438" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">2 950 Kc</text>
+  <text x="118" y="438" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-018 • Jana Nováková • Vystaveno 10.02.2026</text>
+  <text x="1086" y="438" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">2 950 Kč</text>
 
   <rect x="98" y="468" width="1008" height="56" rx="10" fill="#f7faff"/>
-  <text x="118" y="504" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-017 • Petra Kralova • Vystaveno 08.02.2026</text>
-  <text x="1086" y="504" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">1 050 Kc</text>
+  <text x="118" y="504" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-017 • Petra Králová • Vystaveno 08.02.2026</text>
+  <text x="1086" y="504" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">1 050 Kč</text>
 
   <rect x="98" y="534" width="1008" height="56" rx="10" fill="#f7faff"/>
-  <text x="118" y="570" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-016 • Eva Horakova • Vystaveno 07.02.2026</text>
-  <text x="1086" y="570" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">900 Kc</text>
+  <text x="118" y="570" font-family="Arial, sans-serif" font-size="21" fill="#334155">2026-016 • Eva Horáková • Vystaveno 07.02.2026</text>
+  <text x="1086" y="570" text-anchor="end" font-family="Arial, sans-serif" font-size="21" fill="#138a36" font-weight="700">900 Kč</text>
 </svg>

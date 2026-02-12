@@ -86,33 +86,33 @@ const state = {
 
 const PRO_PREVIEW_MAP = {
   economy: {
-    title: 'Ekonomika - nahled',
-    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani ukladat.',
+    title: 'Ekonomika - náhled',
+    description: 'Náhled funkcí PRO verze. V tomto režimu nejde nic upravovat ani ukládat.',
     images: [
-      { src: '/previews/economy-1.svg', alt: 'Nahled ekonomiky 1', caption: 'Souhrn ekonomiky a grafy' },
-      { src: '/previews/economy-2.svg', alt: 'Nahled ekonomiky 2', caption: 'Detail prijmu a vydaju' }
+      { src: '/previews/economy-1.svg', alt: 'Náhled ekonomiky 1', caption: 'Souhrn ekonomiky a grafy' },
+      { src: '/previews/economy-2.svg', alt: 'Náhled ekonomiky 2', caption: 'Detail příjmů a výdajů' }
     ]
   },
   calendar: {
-    title: 'Kalendar - nahled',
-    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani ukladat.',
+    title: 'Kalendář - náhled',
+    description: 'Náhled funkcí PRO verze. V tomto režimu nejde nic upravovat ani ukládat.',
     images: [
-      { src: '/previews/calendar-1.svg', alt: 'Nahled kalendare 1', caption: 'Mesicni pohled rezervaci' },
-      { src: '/previews/calendar-2.svg', alt: 'Nahled kalendare 2', caption: 'Rezervace a dostupnost' }
+      { src: '/previews/calendar-1.svg', alt: 'Náhled kalendáře 1', caption: 'Měsíční pohled rezervací' },
+      { src: '/previews/calendar-2.svg', alt: 'Náhled kalendáře 2', caption: 'Rezervace a dostupnost' }
     ]
   },
   billing: {
-    title: 'Fakturace - nahled',
-    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani vystavit.',
+    title: 'Fakturace - náhled',
+    description: 'Náhled funkcí PRO verze. V tomto režimu nejde nic upravovat ani vystavit.',
     images: [
-      { src: '/previews/billing-1.svg', alt: 'Nahled fakturace', caption: 'Prehled faktur a stavu plateb' }
+      { src: '/previews/billing-1.svg', alt: 'Náhled fakturace', caption: 'Přehled faktur a stavu plateb' }
     ]
   },
   notifications: {
-    title: 'Notifikace - nahled',
-    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani odesilat.',
+    title: 'Notifikace - náhled',
+    description: 'Náhled funkcí PRO verze. V tomto režimu nejde nic upravovat ani odesílat.',
     images: [
-      { src: '/previews/notifications-1.svg', alt: 'Nahled notifikaci', caption: 'Nastaveni e-mail a SMS notifikaci' }
+      { src: '/previews/notifications-1.svg', alt: 'Náhled notifikací', caption: 'Nastavení e-mail a SMS notifikací' }
     ]
   }
 };
@@ -298,7 +298,7 @@ async function tryUnlockProAccess() {
   state.proPin = pin.trim();
   const allowed = await loadProAccess();
   if (!allowed) {
-    alert('PIN neni spravny.');
+    alert('PIN není správný.');
     state.proPin = '';
     applyProAccess();
     return false;
@@ -325,10 +325,10 @@ function openProPreviewModal(featureKey, onUnlock) {
         <h2>${preview.title}</h2>
         <div class="meta">${preview.description}</div>
       </div>
-      <button class="ghost" id="closeModal">Zavrit</button>
+      <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
-      <div class="preview-note">Klient vidi pouze obrazkovy nahled. Funkce jsou aktivni jen v PRO verzi.</div>
+      <div class="preview-note">Klient vidí pouze obrázkový náhled. Funkce jsou aktivní jen v PRO verzi.</div>
       <div class="preview-gallery">${gallery}</div>
       <div class="actions-row">
         <button class="ghost" id="unlockProAccess">Odemknout PRO (PIN)</button>
@@ -1562,17 +1562,17 @@ function openBillingModal() {
     <div class="modal-header">
       <div>
         <h2>Fakturace</h2>
-        <div class="meta">Modul pro vystaveni faktur a evidenci plateb.</div>
+        <div class="meta">Modul pro vystavení faktur a evidenci plateb.</div>
       </div>
-      <button class="ghost" id="closeModal">Zavrit</button>
+      <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
       <div class="settings-section">
         <h3>Funkce PRO verze</h3>
         <div class="settings-list">
-          <div class="settings-item"><span>Vystaveni faktury z navstevy</span><span>Aktivni v PRO</span></div>
-          <div class="settings-item"><span>Evidovani uhrad</span><span>Aktivni v PRO</span></div>
-          <div class="settings-item"><span>Export dokladu</span><span>Aktivni v PRO</span></div>
+          <div class="settings-item"><span>Vystavení faktury z návštěvy</span><span>Aktivní v PRO</span></div>
+          <div class="settings-item"><span>Evidování úhrad</span><span>Aktivní v PRO</span></div>
+          <div class="settings-item"><span>Export dokladů</span><span>Aktivní v PRO</span></div>
         </div>
       </div>
     </div>
