@@ -596,7 +596,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.get('/api/pro-access', (req, res) => {
-  res.json({ allowed: isProAllowed(req) });
+  res.json({ allowed: isProAllowed(req) || isProPinValid(req) });
 });
 
 app.get('/api/public/services', async (req, res) => {

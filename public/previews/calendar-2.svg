@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <rect width="1200" height="760" fill="#f5f7fc"/>
+  <rect x="32" y="28" width="1136" height="704" rx="24" fill="#ffffff" stroke="#dfe5f2"/>
+  <text x="72" y="92" font-family="Arial, sans-serif" font-size="40" fill="#121826" font-weight="700">Rezervace a dostupnost pracovnika</text>
+
+  <rect x="72" y="130" width="1056" height="110" rx="14" fill="#f8fbff" stroke="#d9e5fb"/>
+  <text x="98" y="176" font-family="Arial, sans-serif" font-size="25" fill="#334155">Vybrany den: 11.02.2026  •  Pracovnik: Jana Hrdlickova</text>
+  <text x="98" y="214" font-family="Arial, sans-serif" font-size="22" fill="#5b6b84">Pracovni cas: 08:00-15:00  •  Interval: 30 minut</text>
+
+  <rect x="72" y="268" width="684" height="420" rx="16" fill="#fcfdff" stroke="#dfe6f7"/>
+  <text x="102" y="312" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Volne/obsazene sloty</text>
+
+  <g font-family="Arial, sans-serif" font-size="23" font-weight="700">
+    <rect x="98" y="336" width="300" height="52" rx="10" fill="#eefcf3" stroke="#2fa35b"/><text x="128" y="370" fill="#1f8b48">08:00  •  volno</text>
+    <rect x="420" y="336" width="300" height="52" rx="10" fill="#eefcf3" stroke="#2fa35b"/><text x="450" y="370" fill="#1f8b48">08:30  •  volno</text>
+
+    <rect x="98" y="398" width="300" height="52" rx="10" fill="#fff3f1" stroke="#de5a4f"/><text x="128" y="432" fill="#cc3b30">09:00  •  obsazeno</text>
+    <rect x="420" y="398" width="300" height="52" rx="10" fill="#fff3f1" stroke="#de5a4f"/><text x="450" y="432" fill="#cc3b30">09:30  •  obsazeno</text>
+
+    <rect x="98" y="460" width="300" height="52" rx="10" fill="#eefcf3" stroke="#2fa35b"/><text x="128" y="494" fill="#1f8b48">10:00  •  volno</text>
+    <rect x="420" y="460" width="300" height="52" rx="10" fill="#eefcf3" stroke="#2fa35b"/><text x="450" y="494" fill="#1f8b48">10:30  •  volno</text>
+  </g>
+
+  <rect x="786" y="268" width="342" height="420" rx="16" fill="#fffcfa" stroke="#f1e1d4"/>
+  <text x="816" y="312" font-family="Arial, sans-serif" font-size="30" fill="#172033" font-weight="700">Seznam rezervaci</text>
+
+  <rect x="810" y="338" width="294" height="84" rx="10" fill="#fff5ef"/>
+  <text x="828" y="372" font-family="Arial, sans-serif" font-size="21" fill="#334155">09:00  •  Kosmetika</text>
+  <text x="828" y="402" font-family="Arial, sans-serif" font-size="19" fill="#7c879a">Klientka: Petra Novakova</text>
+
+  <rect x="810" y="436" width="294" height="84" rx="10" fill="#fff5ef"/>
+  <text x="828" y="470" font-family="Arial, sans-serif" font-size="21" fill="#334155">12:30  •  Depilace</text>
+  <text x="828" y="500" font-family="Arial, sans-serif" font-size="19" fill="#7c879a">Klientka: Jana Kralova</text>
+
+  <rect x="810" y="534" width="294" height="84" rx="10" fill="#fff5ef"/>
+  <text x="828" y="568" font-family="Arial, sans-serif" font-size="21" fill="#334155">14:00  •  Liceni</text>
+  <text x="828" y="598" font-family="Arial, sans-serif" font-size="19" fill="#7c879a">Klientka: Eva Horakova</text>
+</svg>

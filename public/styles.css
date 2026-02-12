@@ -935,6 +935,44 @@ button.primary:hover {
   font-size: 12px;
 }
 
+.preview-note {
+  background: #f9f7f3;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.preview-gallery {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  pointer-events: none;
+}
+
+.preview-card {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  background: #fff;
+}
+
+.preview-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+  border: 1px solid #e8e4dc;
+}
+
+.preview-card figcaption {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;

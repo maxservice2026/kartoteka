@@ -84,6 +84,39 @@ const state = {
   }
 };
 
+const PRO_PREVIEW_MAP = {
+  economy: {
+    title: 'Ekonomika - nahled',
+    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani ukladat.',
+    images: [
+      { src: '/previews/economy-1.svg', alt: 'Nahled ekonomiky 1', caption: 'Souhrn ekonomiky a grafy' },
+      { src: '/previews/economy-2.svg', alt: 'Nahled ekonomiky 2', caption: 'Detail prijmu a vydaju' }
+    ]
+  },
+  calendar: {
+    title: 'Kalendar - nahled',
+    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani ukladat.',
+    images: [
+      { src: '/previews/calendar-1.svg', alt: 'Nahled kalendare 1', caption: 'Mesicni pohled rezervaci' },
+      { src: '/previews/calendar-2.svg', alt: 'Nahled kalendare 2', caption: 'Rezervace a dostupnost' }
+    ]
+  },
+  billing: {
+    title: 'Fakturace - nahled',
+    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani vystavit.',
+    images: [
+      { src: '/previews/billing-1.svg', alt: 'Nahled fakturace', caption: 'Prehled faktur a stavu plateb' }
+    ]
+  },
+  notifications: {
+    title: 'Notifikace - nahled',
+    description: 'Nahled funkci PRO verze. V tomto rezimu nejde nic upravovat ani odesilat.',
+    images: [
+      { src: '/previews/notifications-1.svg', alt: 'Nahled notifikaci', caption: 'Nastaveni e-mail a SMS notifikaci' }
+    ]
+  }
+};
+
 let handleUnauthorized = () => {};
 
 const api = {
@@ -259,19 +292,68 @@ function applyProAccess() {
   });
 }
 
-async function ensureProAccess() {
-  if (state.proAllowed) return true;
-  const pin = prompt('Zadej PIN pro PRO funkce:');
+async function tryUnlockProAccess() {
+  const pin = prompt('Zadej PIN pro odemceni PRO funkci:');
   if (!pin) return false;
   state.proPin = pin.trim();
   const allowed = await loadProAccess();
   if (!allowed) {
-    alert('PIN není správný.');
+    alert('PIN neni spravny.');
     state.proPin = '';
     applyProAccess();
     return false;
   }
   return true;
+}
+
+function openProPreviewModal(featureKey, onUnlock) {
+  const preview = PRO_PREVIEW_MAP[featureKey] || PRO_PREVIEW_MAP.economy;
+  const gallery = (preview.images || [])
+    .map(
+      (image) => `
+        <figure class="preview-card">
+          <img src="${image.src}" alt="${image.alt}" loading="lazy" />
+          ${image.caption ? `<figcaption>${image.caption}</figcaption>` : ''}
+        </figure>
+      `
+    )
+    .join('');
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>${preview.title}</h2>
+        <div class="meta">${preview.description}</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavrit</button>
+    </div>
+    <div class="modal-grid">
+      <div class="preview-note">Klient vidi pouze obrazkovy nahled. Funkce jsou aktivni jen v PRO verzi.</div>
+      <div class="preview-gallery">${gallery}</div>
+      <div class="actions-row">
+        <button class="ghost" id="unlockProAccess">Odemknout PRO (PIN)</button>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+  const unlockBtn = document.getElementById('unlockProAccess');
+  if (unlockBtn) {
+    unlockBtn.addEventListener('click', async () => {
+      const unlocked = await tryUnlockProAccess();
+      if (!unlocked) return;
+      closeModal();
+      await onUnlock();
+    });
+  }
+}
+
+async function runProFeature(featureKey, openFeature) {
+  if (state.proAllowed) {
+    await openFeature();
+    return;
+  }
+  openProPreviewModal(featureKey, openFeature);
 }
 
 function hideAuthScreen() {
@@ -1475,32 +1557,64 @@ async function openEconomyModal() {
   await loadEconomy();
 }
 
+function openBillingModal() {
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Fakturace</h2>
+        <div class="meta">Modul pro vystaveni faktur a evidenci plateb.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavrit</button>
+    </div>
+    <div class="modal-grid">
+      <div class="settings-section">
+        <h3>Funkce PRO verze</h3>
+        <div class="settings-list">
+          <div class="settings-item"><span>Vystaveni faktury z navstevy</span><span>Aktivni v PRO</span></div>
+          <div class="settings-item"><span>Evidovani uhrad</span><span>Aktivni v PRO</span></div>
+          <div class="settings-item"><span>Export dokladu</span><span>Aktivni v PRO</span></div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+}
+
 function openNotificationsModal() {
   openModal(`
     <div class="modal-header">
       <div>
         <h2>Notifikace</h2>
-        <div class="meta">Přehled plánovaných upozornění e-mail/SMS.</div>
+        <div class="meta">Přehled funkčních upozornění e-mail/SMS v PRO verzi.</div>
       </div>
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
       <div class="settings-section">
         <h3>E-mailové notifikace</h3>
-        <div class="meta">Zde bude možné zapnout/vypnout jednotlivé typy upozornění.</div>
+        <div class="meta">Možnost zapnutí/vypnutí jednotlivých typů upozornění.</div>
         <div class="settings-list">
-          <div class="settings-item"><span>Připomenutí rezervace</span><span>Připravuje se</span></div>
-          <div class="settings-item"><span>Potvrzení o zrušení rezervace</span><span>Připravuje se</span></div>
-          <div class="settings-item"><span>Zaslání dokladu na e-mail</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Připomenutí rezervace</span><span>Funkční v PRO verzi</span></div>
+          <div class="settings-item"><span>Potvrzení o zrušení rezervace</span><span>Funkční v PRO verzi</span></div>
+          <div class="settings-item"><span>Zaslání dokladu na e-mail</span><span>Funkční v PRO verzi</span></div>
+        </div>
+        <div class="field">
+          <label>Další možnosti</label>
+          <input type="text" value="Lze přidávat další vlastní e-mailové notifikace." readonly />
         </div>
       </div>
       <div class="settings-section">
         <h3>SMS notifikace</h3>
-        <div class="meta">Budou dostupné automatické SMS podle stavu rezervace.</div>
+        <div class="meta">Automatické SMS podle stavu rezervace.</div>
         <div class="settings-list">
-          <div class="settings-item"><span>Připomenutí rezervace den předem</span><span>Připravuje se</span></div>
-          <div class="settings-item"><span>Potvrzení změny termínu</span><span>Připravuje se</span></div>
-          <div class="settings-item"><span>Potvrzení zrušení rezervace</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Připomenutí rezervace den předem</span><span>Funkční v PRO verzi</span></div>
+          <div class="settings-item"><span>Potvrzení změny termínu</span><span>Funkční v PRO verzi</span></div>
+          <div class="settings-item"><span>Potvrzení zrušení rezervace</span><span>Funkční v PRO verzi</span></div>
+        </div>
+        <div class="field">
+          <label>Další možnosti</label>
+          <input type="text" value="Lze přidávat další vlastní SMS notifikace." readonly />
         </div>
       </div>
     </div>
@@ -1941,29 +2055,21 @@ function wireEvents() {
     openSettingsModal().catch(() => {});
   });
   dom.btnEconomy.addEventListener('click', async () => {
-    if (await ensureProAccess()) {
-      openEconomyModal();
-    }
+    await runProFeature('economy', openEconomyModal);
   });
   if (dom.btnCalendar) {
     dom.btnCalendar.addEventListener('click', async () => {
-      if (await ensureProAccess()) {
-        openCalendarModal();
-      }
+      await runProFeature('calendar', openCalendarModal);
     });
   }
   if (dom.btnBilling) {
     dom.btnBilling.addEventListener('click', async () => {
-      if (await ensureProAccess()) {
-        alert('Fakturace bude dostupná v PRO verzi.');
-      }
+      await runProFeature('billing', openBillingModal);
     });
   }
   if (dom.btnNotifications) {
     dom.btnNotifications.addEventListener('click', async () => {
-      if (await ensureProAccess()) {
-        openNotificationsModal();
-      }
+      await runProFeature('notifications', openNotificationsModal);
     });
   }
   dom.btnLogout.addEventListener('click', handleLogout);
