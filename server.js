@@ -268,7 +268,7 @@ async function requireAuth(req, res, next) {
     if (!token) return res.status(401).json({ error: 'Nejste přihlášeni.' });
 
     const row = await db.get(
-      `SELECT s.token, s.user_id, s.expires_at, u.username, u.full_name, u.role
+      `SELECT s.token, s.user_id, s.expires_at, u.username, u.full_name, u.role, u.is_superadmin
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token = ? AND u.active = 1`,
@@ -286,7 +286,8 @@ async function requireAuth(req, res, next) {
       id: row.user_id,
       username: row.username,
       full_name: row.full_name,
-      role: row.role
+      role: row.role,
+      is_superadmin: toInt(row.is_superadmin, 0) === 1
     };
     req.token = token;
     return next();
@@ -361,6 +362,7 @@ async function initDb() {
       username TEXT NOT NULL UNIQUE,
       full_name TEXT NOT NULL,
       role TEXT NOT NULL,
+      is_superadmin INTEGER NOT NULL DEFAULT 0,
       password_hash TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
@@ -464,6 +466,7 @@ async function initDb() {
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('users', 'is_superadmin', 'INTEGER DEFAULT 0');
   await ensureColumn('clones', 'domain', 'TEXT');
   await ensureColumn('clones', 'plan', "TEXT DEFAULT 'basic'");
   await ensureColumn('clones', 'status', "TEXT DEFAULT 'draft'");
@@ -477,10 +480,21 @@ async function initDb() {
   await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
+  await db.run('UPDATE users SET is_superadmin = 0 WHERE is_superadmin IS NULL');
   await db.run("UPDATE clones SET plan = 'basic' WHERE plan IS NULL");
   await db.run("UPDATE clones SET status = 'draft' WHERE status IS NULL");
   await db.run('UPDATE clones SET active = 1 WHERE active IS NULL');
   await db.run('UPDATE clones SET updated_at = created_at WHERE updated_at IS NULL');
+
+  const superAdminRow = await db.get('SELECT COUNT(*) as count FROM users WHERE active = 1 AND is_superadmin = 1');
+  if (toInt(superAdminRow?.count, 0) === 0) {
+    const firstAdmin = await db.get(
+      "SELECT id FROM users WHERE active = 1 AND role = 'admin' ORDER BY created_at ASC LIMIT 1"
+    );
+    if (firstAdmin?.id) {
+      await db.run('UPDATE users SET is_superadmin = 1 WHERE id = ?', [firstAdmin.id]);
+    }
+  }
 }
 
 async function seedDefaults() {
@@ -554,6 +568,12 @@ async function seedDefaults() {
 }
 
 const requireAdmin = requireRole('admin');
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.user || req.user.role !== 'admin' || !req.user.is_superadmin) {
+    return res.status(403).json({ error: 'Přístup pouze pro super administrátora.' });
+  }
+  return next();
+};
 
 async function hasUsers() {
   const row = await db.get('SELECT COUNT(*) as count FROM users WHERE active = 1');
@@ -565,13 +585,22 @@ function userView(row) {
     id: row.id,
     username: row.username,
     full_name: row.full_name,
-    role: row.role
+    role: row.role,
+    is_superadmin: toInt(row.is_superadmin, 0) === 1
   };
 }
 
 async function otherAdminCount(excludeId) {
   const row = await db.get(
     'SELECT COUNT(*) as count FROM users WHERE active = 1 AND role = ? AND id != ?',
+    ['admin', excludeId]
+  );
+  return toInt(row?.count, 0);
+}
+
+async function otherSuperAdminCount(excludeId) {
+  const row = await db.get(
+    'SELECT COUNT(*) as count FROM users WHERE active = 1 AND role = ? AND is_superadmin = 1 AND id != ?',
     ['admin', excludeId]
   );
   return toInt(row?.count, 0);
@@ -640,8 +669,8 @@ app.post('/api/setup', async (req, res) => {
   const id = newId();
   const now = nowIso();
   await db.run(
-    'INSERT INTO users (id, username, full_name, role, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [id, username, fullName, 'admin', hashPassword(password), now]
+    'INSERT INTO users (id, username, full_name, role, is_superadmin, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, username, fullName, 'admin', 1, hashPassword(password), now]
   );
   await upsertWorker(id, fullName, 1);
 
@@ -1193,7 +1222,7 @@ app.delete('/api/services/:id', requireAdmin, async (req, res) => {
 
 app.get('/api/users', requireAdmin, async (req, res) => {
   const users = await db.all(
-    'SELECT id, username, full_name, role, active FROM users WHERE active = 1 ORDER BY full_name'
+    'SELECT id, username, full_name, role, is_superadmin, active FROM users WHERE active = 1 ORDER BY full_name'
   );
   res.json(users);
 });
@@ -1228,6 +1257,9 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const existing = await db.get('SELECT * FROM users WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'Uživatel nenalezen.' });
+  if (toInt(existing.is_superadmin, 0) === 1 && !req.user.is_superadmin) {
+    return res.status(403).json({ error: 'Nelze upravit super administrátora.' });
+  }
 
   const username = normalizeUsername(payload.username) || existing.username;
   const fullName = (payload.full_name || '').trim() || existing.full_name;
@@ -1246,6 +1278,9 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
 
   if (existing.role === 'admin' && role !== 'admin' && (await otherAdminCount(existing.id)) === 0) {
     return res.status(400).json({ error: 'Musí zůstat alespoň jeden administrátor.' });
+  }
+  if (toInt(existing.is_superadmin, 0) === 1 && role !== 'admin' && (await otherSuperAdminCount(existing.id)) === 0) {
+    return res.status(400).json({ error: 'Musí zůstat alespoň jeden super administrátor.' });
   }
 
   const passwordHash = password ? hashPassword(password) : existing.password_hash;
@@ -1266,9 +1301,15 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
 app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   const existing = await db.get('SELECT * FROM users WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) return res.status(404).json({ error: 'Uživatel nenalezen.' });
+  if (toInt(existing.is_superadmin, 0) === 1 && !req.user.is_superadmin) {
+    return res.status(403).json({ error: 'Nelze smazat super administrátora.' });
+  }
 
   if (existing.role === 'admin' && (await otherAdminCount(existing.id)) === 0) {
     return res.status(400).json({ error: 'Musí zůstat alespoň jeden administrátor.' });
+  }
+  if (toInt(existing.is_superadmin, 0) === 1 && (await otherSuperAdminCount(existing.id)) === 0) {
+    return res.status(400).json({ error: 'Musí zůstat alespoň jeden super administrátor.' });
   }
 
   await db.run('UPDATE users SET active = 0 WHERE id = ?', [existing.id]);
@@ -1277,7 +1318,7 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/clones', requireAdmin, async (req, res) => {
+app.get('/api/clones', requireSuperAdmin, async (req, res) => {
   const rows = await db.all(
     `SELECT id, name, slug, domain, plan, status, admin_name, admin_email, note, created_at, updated_at
      FROM clones
@@ -1287,7 +1328,7 @@ app.get('/api/clones', requireAdmin, async (req, res) => {
   res.json({ clones: rows });
 });
 
-app.post('/api/clones', requireAdmin, async (req, res) => {
+app.post('/api/clones', requireSuperAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const slug = normalizeSlug(payload.slug || payload.name);
@@ -1339,7 +1380,7 @@ app.post('/api/clones', requireAdmin, async (req, res) => {
   res.json({ id });
 });
 
-app.put('/api/clones/:id', requireAdmin, async (req, res) => {
+app.put('/api/clones/:id', requireSuperAdmin, async (req, res) => {
   const existing = await db.get('SELECT * FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) {
     return res.status(404).json({ error: 'Klon nenalezen.' });
@@ -1392,7 +1433,7 @@ app.put('/api/clones/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/clones/:id/template-refresh', requireAdmin, async (req, res) => {
+app.post('/api/clones/:id/template-refresh', requireSuperAdmin, async (req, res) => {
   const existing = await db.get('SELECT id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) {
     return res.status(404).json({ error: 'Klon nenalezen.' });
@@ -1407,7 +1448,7 @@ app.post('/api/clones/:id/template-refresh', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/clones/:id/template', requireAdmin, async (req, res) => {
+app.get('/api/clones/:id/template', requireSuperAdmin, async (req, res) => {
   const row = await db.get('SELECT template_json FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!row) {
     return res.status(404).json({ error: 'Klon nenalezen.' });
@@ -1423,7 +1464,7 @@ app.get('/api/clones/:id/template', requireAdmin, async (req, res) => {
   res.json({ template });
 });
 
-app.delete('/api/clones/:id', requireAdmin, async (req, res) => {
+app.delete('/api/clones/:id', requireSuperAdmin, async (req, res) => {
   const existing = await db.get('SELECT id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) {
     return res.status(404).json({ error: 'Klon nenalezen.' });

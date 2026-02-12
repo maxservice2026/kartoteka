@@ -277,7 +277,8 @@ function updateUserUi() {
         : state.auth.user.role === 'reception'
           ? 'Recepční'
           : 'Pracovník';
-    dom.userInfo.textContent = `${state.auth.user.full_name} • ${roleLabel}`;
+    const superLabel = state.auth.user.is_superadmin ? ' • Super admin' : '';
+    dom.userInfo.textContent = `${state.auth.user.full_name} • ${roleLabel}${superLabel}`;
   } else {
     dom.userInfo.textContent = '';
   }
@@ -531,7 +532,7 @@ async function loadUsers() {
 }
 
 async function loadClones() {
-  if (state.auth.user?.role !== 'admin') {
+  if (state.auth.user?.role !== 'admin' || !state.auth.user?.is_superadmin) {
     state.clones = [];
     return;
   }
@@ -1784,7 +1785,9 @@ async function openServiceDetailModal(serviceId) {
 async function openSettingsModal() {
   if (state.auth.user?.role === 'admin') {
     await loadUsers();
-    await loadClones();
+    if (state.auth.user?.is_superadmin) {
+      await loadClones();
+    }
   }
 
   openModal(`
@@ -1830,24 +1833,26 @@ async function openSettingsModal() {
         ]
       })
     );
-    sections.push(
-      settingsSectionTemplate({
-        title: 'Klony (MVP)',
-        subtitle: 'Správa klonů aplikace pro další subjekty.',
-        formId: 'clones',
-        listId: 'cloneList',
-        fields: [
-          '<div class="field"><label>Název klonu</label><input type="text" data-field="name" placeholder="Např. Salon Brno" /></div>',
-          '<div class="field"><label>Slug</label><input type="text" data-field="slug" placeholder="napr-salon-brno" /></div>',
-          '<div class="field"><label>Doména</label><input type="text" data-field="domain" placeholder="brno.prettyvisage.cz" /></div>',
-          '<div class="field"><label>Tarif</label><select data-field="plan"><option value="basic">Basic</option><option value="pro">PRO</option><option value="enterprise">Enterprise</option></select></div>',
-          '<div class="field"><label>Stav</label><select data-field="status"><option value="draft">Návrh</option><option value="active">Aktivní</option><option value="suspended">Pozastavený</option></select></div>',
-          '<div class="field"><label>Admin jméno</label><input type="text" data-field="admin_name" placeholder="Jméno administrátora" /></div>',
-          '<div class="field"><label>Admin e-mail</label><input type="email" data-field="admin_email" placeholder="admin@domena.cz" /></div>',
-          '<div class="field"><label>Poznámka</label><input type="text" data-field="note" placeholder="Interní poznámka" /></div>'
-        ]
-      })
-    );
+    if (state.auth.user?.is_superadmin) {
+      sections.push(
+        settingsSectionTemplate({
+          title: 'Klony (MVP)',
+          subtitle: 'Správa klonů aplikace pro další subjekty.',
+          formId: 'clones',
+          listId: 'cloneList',
+          fields: [
+            '<div class="field"><label>Název klonu</label><input type="text" data-field="name" placeholder="Např. Salon Brno" /></div>',
+            '<div class="field"><label>Slug</label><input type="text" data-field="slug" placeholder="napr-salon-brno" /></div>',
+            '<div class="field"><label>Doména</label><input type="text" data-field="domain" placeholder="brno.prettyvisage.cz" /></div>',
+            '<div class="field"><label>Tarif</label><select data-field="plan"><option value="basic">Basic</option><option value="pro">PRO</option><option value="enterprise">Enterprise</option></select></div>',
+            '<div class="field"><label>Stav</label><select data-field="status"><option value="draft">Návrh</option><option value="active">Aktivní</option><option value="suspended">Pozastavený</option></select></div>',
+            '<div class="field"><label>Admin jméno</label><input type="text" data-field="admin_name" placeholder="Jméno administrátora" /></div>',
+            '<div class="field"><label>Admin e-mail</label><input type="email" data-field="admin_email" placeholder="admin@domena.cz" /></div>',
+            '<div class="field"><label>Poznámka</label><input type="text" data-field="note" placeholder="Interní poznámka" /></div>'
+          ]
+        })
+      );
+    }
   }
 
   grid.innerHTML = sections.join('');
@@ -1938,9 +1943,10 @@ function settingsItemTemplate(item, suffix = '', section = '') {
 
 function userItemTemplate(user) {
   const roleLabel = user.role === 'admin' ? 'Administrátor' : user.role === 'reception' ? 'Recepční' : 'Pracovník';
+  const superLabel = user.is_superadmin ? ' • Super admin' : '';
   return `
     <div class="settings-item">
-      <span>${user.full_name} • ${user.username} • ${roleLabel}</span>
+      <span>${user.full_name} • ${user.username} • ${roleLabel}${superLabel}</span>
       <div class="settings-actions">
         <button class="ghost" data-action="edit" data-section="users" data-id="${user.id}">Upravit</button>
         <button class="ghost" data-action="delete" data-section="users" data-id="${user.id}">Smazat</button>
@@ -2030,10 +2036,12 @@ function wireSettingsForms() {
       list: state.users,
       resource: 'users'
     };
-    sections.clones = {
-      list: state.clones,
-      resource: 'clones'
-    };
+    if (state.auth.user?.is_superadmin) {
+      sections.clones = {
+        list: state.clones,
+        resource: 'clones'
+      };
+    }
   }
 
   Object.entries(sections).forEach(([key, config]) => {
