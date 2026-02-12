@@ -1317,7 +1317,7 @@ async function openEconomyModal() {
     `;
   }
 
-  function trendHtml(rows) {
+  function trendHtml(rows, incomeValue, incomeLabel) {
     const series = Array.isArray(rows) ? rows : [];
     const values = series.map((item) => Number(item.total) || 0);
     const first = values[0] || 0;
@@ -1345,6 +1345,7 @@ async function openEconomyModal() {
           <span class="eco-trend-arrow">${arrow}</span>
           <span>${diff >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>
         </div>
+        <div class="eco-trend-value">${incomeLabel}: ${formatCzk(incomeValue)}</div>
         <svg class="eco-sparkline" viewBox="0 0 180 44" aria-hidden="true">
           <polyline points="${points}" />
         </svg>
@@ -1364,11 +1365,14 @@ async function openEconomyModal() {
     if (serviceId) params.set('service_id', serviceId);
     if (workerId) params.set('worker_id', workerId);
     const data = await api.get(`/api/economy?${params.toString()}`);
+    const hasGlobalIncome = Number.isFinite(Number(data.totals_all_income));
+    const trendIncomeValue = hasGlobalIncome ? Number(data.totals_all_income) : Number(data.totals?.income || 0);
+    const trendIncomeLabel = hasGlobalIncome ? 'Celková tržba' : 'Tržba';
     const summary = document.getElementById('ecoSummary');
     let summaryHtml = `
       <div class="eco-overview">
         ${economyDonutHtml(data.totals)}
-        ${trendHtml(data.monthly_income_last6)}
+        ${trendHtml(data.monthly_income_last6, trendIncomeValue, trendIncomeLabel)}
       </div>
       <div class="stats">
         <div>Tržba: <strong class="stat-income">${formatCzk(data.totals.income)}</strong></div>
