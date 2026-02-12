@@ -1288,14 +1288,17 @@ async function openEconomyModal() {
   function economyDonutHtml(totals) {
     const income = Math.max(0, Number(totals?.income) || 0);
     const expenses = Math.max(0, Number(totals?.expenses) || 0);
+    const profitValue = Number(totals?.profit) || 0;
     const basis = income + expenses;
     const incomePct = basis > 0 ? (income / basis) * 100 : 0;
     const expensesPct = basis > 0 ? (expenses / basis) * 100 : 0;
+    const profitPct = income > 0 ? (profitValue / income) * 100 : 0;
     const radius = 44;
     const circumference = 2 * Math.PI * radius;
     const incomeLen = (incomePct / 100) * circumference;
     const expensesLen = (expensesPct / 100) * circumference;
-    const profit = (Number(totals?.profit) || 0).toLocaleString('cs-CZ');
+    const profit = profitValue.toLocaleString('cs-CZ');
+    const profitPctText = `${profitPct >= 0 ? '+' : ''}${profitPct.toFixed(1)} %`;
 
     return `
       <div class="eco-card">
@@ -1311,6 +1314,7 @@ async function openEconomyModal() {
           <div class="eco-donut-center">
             <div class="eco-donut-label">Zisk</div>
             <div class="eco-donut-value">${profit} Kč</div>
+            <div class="eco-donut-value">${profitPctText}</div>
           </div>
         </div>
       </div>
@@ -1469,6 +1473,40 @@ async function openEconomyModal() {
   });
 
   await loadEconomy();
+}
+
+function openNotificationsModal() {
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Notifikace</h2>
+        <div class="meta">Přehled plánovaných upozornění e-mail/SMS.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      <div class="settings-section">
+        <h3>E-mailové notifikace</h3>
+        <div class="meta">Zde bude možné zapnout/vypnout jednotlivé typy upozornění.</div>
+        <div class="settings-list">
+          <div class="settings-item"><span>Připomenutí rezervace</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Potvrzení o zrušení rezervace</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Zaslání dokladu na e-mail</span><span>Připravuje se</span></div>
+        </div>
+      </div>
+      <div class="settings-section">
+        <h3>SMS notifikace</h3>
+        <div class="meta">Budou dostupné automatické SMS podle stavu rezervace.</div>
+        <div class="settings-list">
+          <div class="settings-item"><span>Připomenutí rezervace den předem</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Potvrzení změny termínu</span><span>Připravuje se</span></div>
+          <div class="settings-item"><span>Potvrzení zrušení rezervace</span><span>Připravuje se</span></div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
 }
 
 
@@ -1924,7 +1962,7 @@ function wireEvents() {
   if (dom.btnNotifications) {
     dom.btnNotifications.addEventListener('click', async () => {
       if (await ensureProAccess()) {
-        alert('Notifikace budou dostupné v PRO verzi.');
+        openNotificationsModal();
       }
     });
   }
