@@ -198,6 +198,17 @@ function normalizeUsername(value) {
   return (value || '').toString().trim().toLowerCase();
 }
 
+function normalizeSlug(value) {
+  return (value || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -428,6 +439,21 @@ async function initDb() {
       FOREIGN KEY (service_id) REFERENCES services(id),
       FOREIGN KEY (worker_id) REFERENCES users(id)
     );
+    CREATE TABLE IF NOT EXISTS clones (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      domain TEXT,
+      plan TEXT NOT NULL DEFAULT 'basic',
+      status TEXT NOT NULL DEFAULT 'draft',
+      admin_name TEXT,
+      admin_email TEXT,
+      note TEXT,
+      template_json TEXT,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   await ensureColumn('clients', 'cream', 'TEXT');
@@ -438,10 +464,23 @@ async function initDb() {
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('clones', 'domain', 'TEXT');
+  await ensureColumn('clones', 'plan', "TEXT DEFAULT 'basic'");
+  await ensureColumn('clones', 'status', "TEXT DEFAULT 'draft'");
+  await ensureColumn('clones', 'admin_name', 'TEXT');
+  await ensureColumn('clones', 'admin_email', 'TEXT');
+  await ensureColumn('clones', 'note', 'TEXT');
+  await ensureColumn('clones', 'template_json', 'TEXT');
+  await ensureColumn('clones', 'active', 'INTEGER DEFAULT 1');
+  await ensureColumn('clones', 'updated_at', 'TEXT');
 
   await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
+  await db.run("UPDATE clones SET plan = 'basic' WHERE plan IS NULL");
+  await db.run("UPDATE clones SET status = 'draft' WHERE status IS NULL");
+  await db.run('UPDATE clones SET active = 1 WHERE active IS NULL');
+  await db.run('UPDATE clones SET updated_at = created_at WHERE updated_at IS NULL');
 }
 
 async function seedDefaults() {
@@ -545,6 +584,37 @@ async function getSettings() {
   const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
   const workers = await db.all('SELECT id, full_name as name FROM users WHERE active = 1 ORDER BY full_name');
   return { skinTypes, services, treatments, addons, workers };
+}
+
+function normalizeClonePlan(value) {
+  const raw = (value || '').toString().trim().toLowerCase();
+  if (raw === 'pro' || raw === 'enterprise') return raw;
+  return 'basic';
+}
+
+function normalizeCloneStatus(value) {
+  const raw = (value || '').toString().trim().toLowerCase();
+  if (raw === 'active' || raw === 'suspended') return raw;
+  return 'draft';
+}
+
+async function buildCloneTemplateSnapshot() {
+  const services = await db.all(
+    'SELECT name, form_type, duration_minutes FROM services WHERE active = 1 ORDER BY name'
+  );
+  const skinTypes = await db.all('SELECT name, sort_order FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
+  const treatments = await db.all('SELECT name, price, note FROM treatments WHERE active = 1 ORDER BY name');
+  const addons = await db.all('SELECT name, price FROM addons WHERE active = 1 ORDER BY name');
+
+  return {
+    generated_at: nowIso(),
+    settings: {
+      services,
+      skin_types: skinTypes,
+      treatments,
+      addons
+    }
+  };
 }
 
 app.get('/api/health', (req, res) => {
@@ -1207,6 +1277,161 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/clones', requireAdmin, async (req, res) => {
+  const rows = await db.all(
+    `SELECT id, name, slug, domain, plan, status, admin_name, admin_email, note, created_at, updated_at
+     FROM clones
+     WHERE active = 1
+     ORDER BY created_at DESC`
+  );
+  res.json({ clones: rows });
+});
+
+app.post('/api/clones', requireAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const name = (payload.name || '').trim();
+  const slug = normalizeSlug(payload.slug || payload.name);
+  const domain = (payload.domain || '').trim() || null;
+  const plan = normalizeClonePlan(payload.plan);
+  const status = normalizeCloneStatus(payload.status);
+  const adminName = (payload.admin_name || '').trim() || null;
+  const adminEmail = (payload.admin_email || '').trim() || null;
+  const note = (payload.note || '').trim() || null;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Vyplňte název klonu.' });
+  }
+  if (!slug || slug.length < 3) {
+    return res.status(400).json({ error: 'Slug musí mít alespoň 3 znaky.' });
+  }
+  if (adminEmail && !adminEmail.includes('@')) {
+    return res.status(400).json({ error: 'E-mail administrátora není platný.' });
+  }
+
+  const template = await buildCloneTemplateSnapshot();
+  const id = newId();
+  const now = nowIso();
+  try {
+    await db.run(
+      `INSERT INTO clones (
+        id, name, slug, domain, plan, status, admin_name, admin_email, note, template_json, active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        name,
+        slug,
+        domain,
+        plan,
+        status,
+        adminName,
+        adminEmail,
+        note,
+        JSON.stringify(template),
+        1,
+        now,
+        now
+      ]
+    );
+  } catch (err) {
+    return res.status(400).json({ error: 'Slug už existuje.' });
+  }
+
+  res.json({ id });
+});
+
+app.put('/api/clones/:id', requireAdmin, async (req, res) => {
+  const existing = await db.get('SELECT * FROM clones WHERE id = ? AND active = 1', [req.params.id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Klon nenalezen.' });
+  }
+
+  const payload = req.body || {};
+  const name = (payload.name || existing.name || '').trim();
+  const slug = normalizeSlug(payload.slug || existing.slug);
+  const domain = payload.domain !== undefined
+    ? ((payload.domain || '').trim() || null)
+    : existing.domain;
+  const plan = normalizeClonePlan(payload.plan || existing.plan);
+  const status = normalizeCloneStatus(payload.status || existing.status);
+  const adminName = payload.admin_name !== undefined
+    ? ((payload.admin_name || '').trim() || null)
+    : existing.admin_name;
+  const adminEmail = payload.admin_email !== undefined
+    ? ((payload.admin_email || '').trim() || null)
+    : existing.admin_email;
+  const note = payload.note !== undefined
+    ? ((payload.note || '').trim() || null)
+    : existing.note;
+
+  if (!name) {
+    return res.status(400).json({ error: 'Vyplňte název klonu.' });
+  }
+  if (!slug || slug.length < 3) {
+    return res.status(400).json({ error: 'Slug musí mít alespoň 3 znaky.' });
+  }
+  if (adminEmail && !adminEmail.includes('@')) {
+    return res.status(400).json({ error: 'E-mail administrátora není platný.' });
+  }
+
+  const refreshTemplate = payload.refresh_template === true;
+  const templateJson = refreshTemplate
+    ? JSON.stringify(await buildCloneTemplateSnapshot())
+    : existing.template_json;
+
+  try {
+    await db.run(
+      `UPDATE clones SET
+        name = ?, slug = ?, domain = ?, plan = ?, status = ?, admin_name = ?, admin_email = ?, note = ?, template_json = ?, updated_at = ?
+       WHERE id = ?`,
+      [name, slug, domain, plan, status, adminName, adminEmail, note, templateJson, nowIso(), existing.id]
+    );
+  } catch (err) {
+    return res.status(400).json({ error: 'Slug už existuje.' });
+  }
+
+  res.json({ ok: true });
+});
+
+app.post('/api/clones/:id/template-refresh', requireAdmin, async (req, res) => {
+  const existing = await db.get('SELECT id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Klon nenalezen.' });
+  }
+
+  const template = await buildCloneTemplateSnapshot();
+  await db.run('UPDATE clones SET template_json = ?, updated_at = ? WHERE id = ?', [
+    JSON.stringify(template),
+    nowIso(),
+    existing.id
+  ]);
+  res.json({ ok: true });
+});
+
+app.get('/api/clones/:id/template', requireAdmin, async (req, res) => {
+  const row = await db.get('SELECT template_json FROM clones WHERE id = ? AND active = 1', [req.params.id]);
+  if (!row) {
+    return res.status(404).json({ error: 'Klon nenalezen.' });
+  }
+  let template = {};
+  if (row.template_json) {
+    try {
+      template = JSON.parse(row.template_json);
+    } catch (err) {
+      template = {};
+    }
+  }
+  res.json({ template });
+});
+
+app.delete('/api/clones/:id', requireAdmin, async (req, res) => {
+  const existing = await db.get('SELECT id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
+  if (!existing) {
+    return res.status(404).json({ error: 'Klon nenalezen.' });
+  }
+  await db.run('UPDATE clones SET active = 0, updated_at = ? WHERE id = ?', [nowIso(), existing.id]);
+  res.json({ ok: true });
+});
+
 app.get('/api/clients', async (req, res) => {
   const search = (req.query.search || '').toString().trim();
   let rows;
@@ -1793,7 +2018,8 @@ app.get('/api/backup', requireAdmin, async (req, res) => {
     clients: await db.all('SELECT * FROM clients'),
     visits: await db.all('SELECT * FROM visits'),
     expenses: await db.all('SELECT * FROM expenses'),
-    reservations: await db.all('SELECT * FROM reservations')
+    reservations: await db.all('SELECT * FROM reservations'),
+    clones: await db.all('SELECT * FROM clones')
   };
 
   res.json({
@@ -1818,7 +2044,8 @@ app.post('/api/restore', requireAdmin, async (req, res) => {
     'treatments',
     'services',
     'skin_types',
-    'expenses'
+    'expenses',
+    'clones'
   ];
   const insertOrder = [
     'skin_types',
@@ -1831,7 +2058,8 @@ app.post('/api/restore', requireAdmin, async (req, res) => {
     'clients',
     'visits',
     'expenses',
-    'reservations'
+    'reservations',
+    'clones'
   ];
 
   const insertMany = async (table, rows) => {

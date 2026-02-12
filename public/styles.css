@@ -973,6 +973,19 @@ button.primary:hover {
   color: var(--muted);
 }
 
+.template-pre {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  color: #24324a;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 420px;
+  overflow: auto;
+}
+
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;

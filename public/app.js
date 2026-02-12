@@ -74,6 +74,7 @@ const state = {
   },
   visits: [],
   users: [],
+  clones: [],
   selectedServiceId: null,
   proAllowed: false,
   proPin: '',
@@ -190,6 +191,15 @@ function formatCzk(value) {
   const numeric = Number(value);
   const safe = Number.isFinite(numeric) ? numeric : 0;
   return `${safe.toLocaleString('cs-CZ')} Kč`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function recurringTypeLabel(value) {
@@ -440,6 +450,7 @@ async function onAuthenticated() {
   updateUserUi();
   await loadProAccess();
   await loadSettings();
+  await loadClones();
   await loadClients();
   await loadSummary();
   clearSelection();
@@ -517,6 +528,15 @@ async function loadUsers() {
     return;
   }
   state.users = await api.get('/api/users');
+}
+
+async function loadClones() {
+  if (state.auth.user?.role !== 'admin') {
+    state.clones = [];
+    return;
+  }
+  const data = await api.get('/api/clones');
+  state.clones = data.clones || [];
 }
 
 async function loadClients() {
@@ -1764,6 +1784,7 @@ async function openServiceDetailModal(serviceId) {
 async function openSettingsModal() {
   if (state.auth.user?.role === 'admin') {
     await loadUsers();
+    await loadClones();
   }
 
   openModal(`
@@ -1806,6 +1827,24 @@ async function openSettingsModal() {
           '<div class="field"><label>Uživatelské jméno</label><input type="text" data-field="username" /></div>',
           '<div class="field"><label>Role</label><select data-field="role"><option value="worker">Pracovník</option><option value="reception">Recepční</option><option value="admin">Administrátor</option></select></div>',
           '<div class="field"><label>Heslo</label><input type="password" data-field="password" placeholder="Nové heslo" /></div>'
+        ]
+      })
+    );
+    sections.push(
+      settingsSectionTemplate({
+        title: 'Klony (MVP)',
+        subtitle: 'Správa klonů aplikace pro další subjekty.',
+        formId: 'clones',
+        listId: 'cloneList',
+        fields: [
+          '<div class="field"><label>Název klonu</label><input type="text" data-field="name" placeholder="Např. Salon Brno" /></div>',
+          '<div class="field"><label>Slug</label><input type="text" data-field="slug" placeholder="napr-salon-brno" /></div>',
+          '<div class="field"><label>Doména</label><input type="text" data-field="domain" placeholder="brno.prettyvisage.cz" /></div>',
+          '<div class="field"><label>Tarif</label><select data-field="plan"><option value="basic">Basic</option><option value="pro">PRO</option><option value="enterprise">Enterprise</option></select></div>',
+          '<div class="field"><label>Stav</label><select data-field="status"><option value="draft">Návrh</option><option value="active">Aktivní</option><option value="suspended">Pozastavený</option></select></div>',
+          '<div class="field"><label>Admin jméno</label><input type="text" data-field="admin_name" placeholder="Jméno administrátora" /></div>',
+          '<div class="field"><label>Admin e-mail</label><input type="email" data-field="admin_email" placeholder="admin@domena.cz" /></div>',
+          '<div class="field"><label>Poznámka</label><input type="text" data-field="note" placeholder="Interní poznámka" /></div>'
         ]
       })
     );
@@ -1857,6 +1896,13 @@ function renderSettingsLists() {
       .join('');
   }
 
+  const cloneList = document.getElementById('cloneList');
+  if (cloneList) {
+    cloneList.innerHTML = state.clones
+      .map((clone) => cloneItemTemplate(clone))
+      .join('');
+  }
+
   document.querySelectorAll('.settings-item button[data-action="edit"]').forEach((button) => {
     if (button.dataset.section === 'users') {
       button.addEventListener('click', () => startEditUser(button.dataset.id));
@@ -1865,6 +1911,9 @@ function renderSettingsLists() {
     } else {
       button.addEventListener('click', () => startEditSetting(button.dataset.section, button.dataset.id));
     }
+  });
+  document.querySelectorAll('.settings-item button[data-action="template"]').forEach((button) => {
+    button.addEventListener('click', () => openCloneTemplateModal(button.dataset.id));
   });
   document.querySelectorAll('.settings-item button[data-action="delete"]').forEach((button) => {
     if (button.dataset.section === 'users') {
@@ -1900,6 +1949,62 @@ function userItemTemplate(user) {
   `;
 }
 
+function clonePlanLabel(plan) {
+  if (plan === 'pro') return 'PRO';
+  if (plan === 'enterprise') return 'Enterprise';
+  return 'Basic';
+}
+
+function cloneStatusLabel(status) {
+  if (status === 'active') return 'Aktivní';
+  if (status === 'suspended') return 'Pozastavený';
+  return 'Návrh';
+}
+
+function cloneItemTemplate(clone) {
+  return `
+    <div class="settings-item">
+      <span>
+        ${clone.name} • ${clone.slug} • ${clonePlanLabel(clone.plan)} • ${cloneStatusLabel(clone.status)}
+        ${clone.domain ? ` • ${clone.domain}` : ''}
+      </span>
+      <div class="settings-actions">
+        <button class="ghost" data-action="template" data-id="${clone.id}">Šablona</button>
+        <button class="ghost" data-action="edit" data-section="clones" data-id="${clone.id}">Upravit</button>
+        <button class="ghost" data-action="delete" data-section="clones" data-id="${clone.id}">Smazat</button>
+      </div>
+    </div>
+  `;
+}
+
+async function openCloneTemplateModal(cloneId) {
+  const clone = state.clones.find((item) => item.id === cloneId);
+  if (!clone) return;
+  const data = await api.get(`/api/clones/${cloneId}/template`);
+  const formatted = JSON.stringify(data.template || {}, null, 2);
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Šablona klonu: ${clone.name}</h2>
+        <div class="meta">Výchozí data pro nový klon.</div>
+      </div>
+      <div class="actions-row">
+        <button class="ghost" id="cloneTemplateRefresh">Aktualizovat šablonu</button>
+        <button class="ghost" id="closeModal">Zavřít</button>
+      </div>
+    </div>
+    <div class="modal-grid">
+      <pre class="template-pre">${escapeHtml(formatted)}</pre>
+    </div>
+  `);
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+  document.getElementById('cloneTemplateRefresh').addEventListener('click', async () => {
+    await api.post(`/api/clones/${cloneId}/template-refresh`, {});
+    await loadClones();
+    await openCloneTemplateModal(cloneId);
+  });
+}
+
 function wireSettingsForms() {
   const sections = {
     services: {
@@ -1924,6 +2029,10 @@ function wireSettingsForms() {
     sections.users = {
       list: state.users,
       resource: 'users'
+    };
+    sections.clones = {
+      list: state.clones,
+      resource: 'clones'
     };
   }
 
@@ -1979,6 +2088,8 @@ function startEditSetting(section, id) {
         ? state.settings.treatments
         : section === 'addons'
           ? state.settings.addons
+          : section === 'clones'
+            ? state.clones
           : [];
 
   const item = list.find((entry) => entry.id === id);
@@ -2029,6 +2140,8 @@ async function deleteSetting(section, id) {
         ? 'skin-types'
       : section === 'treatments'
         ? 'treatments'
+        : section === 'clones'
+          ? 'clones'
         : 'addons';
 
   await api.del(`/api/${resource}/${id}`);
