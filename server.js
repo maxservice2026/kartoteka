@@ -313,6 +313,35 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(hashBuffer, hashedBuffer);
 }
 
+function generateTemporaryPassword() {
+  const chunk = crypto.randomBytes(4).toString('hex');
+  return `Tmp-${chunk}-224`;
+}
+
+function buildRecoveryUsername(slug) {
+  const base = (normalizeSlug(slug) || 'tenant').replace(/-/g, '');
+  const username = `recovery${base}`.slice(0, 30);
+  return username || 'recoveryadmin';
+}
+
+async function writeAdminAuditLog({
+  actorTenantId,
+  actorUserId,
+  action,
+  targetTenantId = null,
+  targetCloneId = null,
+  metadata = null
+}) {
+  const id = newId();
+  const payload = metadata ? JSON.stringify(metadata) : null;
+  await db.run(
+    `INSERT INTO admin_audit_logs (
+      id, actor_tenant_id, actor_user_id, action, target_tenant_id, target_clone_id, metadata_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, actorTenantId || null, actorUserId || null, action, targetTenantId, targetCloneId, payload, nowIso()]
+  );
+}
+
 async function upsertWorker(id, name, active = 1, tenantId = null) {
   if (!id) return;
   const existing = await db.get('SELECT id FROM workers WHERE id = ?', [id]);
@@ -566,6 +595,16 @@ async function initDb() {
       enabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS admin_audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_tenant_id TEXT,
+      actor_user_id TEXT,
+      action TEXT NOT NULL,
+      target_tenant_id TEXT,
+      target_clone_id TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
     );
   `);
 
@@ -1705,6 +1744,92 @@ app.put('/api/clones/:id', requireSuperAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/clones/:id/recover-admin', requireSuperAdmin, async (req, res) => {
+  const clone = await db.get(
+    'SELECT id, tenant_id, name, slug, domain, active FROM clones WHERE id = ? AND active = 1',
+    [req.params.id]
+  );
+  if (!clone) {
+    return res.status(404).json({ error: 'Klon nenalezen.' });
+  }
+  if (!clone.tenant_id) {
+    return res.status(400).json({ error: 'Klon nemá přiřazený tenant.' });
+  }
+
+  const tenant = await db.get(
+    'SELECT id, name, slug, domain, active FROM tenants WHERE id = ? AND active = 1',
+    [clone.tenant_id]
+  );
+  if (!tenant) {
+    return res.status(400).json({ error: 'Tenant klonu není aktivní.' });
+  }
+
+  const payload = req.body || {};
+  const requestedFullName = (payload.full_name || '').trim();
+  let recoveryUsername = normalizeUsername(payload.username) || buildRecoveryUsername(clone.slug);
+  const recoveryUserId = `recovery-${clone.id}`;
+  const temporaryPassword = (payload.password || '').trim() || generateTemporaryPassword();
+  const recoveryFullName = requestedFullName || `Obnova ${clone.name}`;
+
+  const usernameConflict = await db.get(
+    'SELECT id FROM users WHERE tenant_id = ? AND username = ?',
+    [clone.tenant_id, recoveryUsername]
+  );
+  if (usernameConflict && usernameConflict.id !== recoveryUserId) {
+    recoveryUsername = `${recoveryUsername}${clone.id.replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase()}`.slice(0, 40);
+  }
+
+  const existing = await db.get(
+    'SELECT id FROM users WHERE id = ? AND tenant_id = ?',
+    [recoveryUserId, clone.tenant_id]
+  );
+  if (existing) {
+    await db.run(
+      `UPDATE users
+       SET username = ?, full_name = ?, role = ?, is_superadmin = 0, password_hash = ?, active = 1
+       WHERE id = ? AND tenant_id = ?`,
+      [recoveryUsername, recoveryFullName, 'admin', hashPassword(temporaryPassword), recoveryUserId, clone.tenant_id]
+    );
+  } else {
+    await db.run(
+      `INSERT INTO users (
+        id, tenant_id, username, full_name, role, is_superadmin, password_hash, active, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [recoveryUserId, clone.tenant_id, recoveryUsername, recoveryFullName, 'admin', 0, hashPassword(temporaryPassword), 1, nowIso()]
+    );
+  }
+
+  await db.run('DELETE FROM sessions WHERE user_id = ? AND tenant_id = ?', [recoveryUserId, clone.tenant_id]);
+  await upsertWorker(recoveryUserId, recoveryFullName, 1, clone.tenant_id);
+  await writeAdminAuditLog({
+    actorTenantId: req.tenant.id,
+    actorUserId: req.user.id,
+    action: 'clone_admin_recovery',
+    targetTenantId: clone.tenant_id,
+    targetCloneId: clone.id,
+    metadata: {
+      clone_name: clone.name,
+      clone_slug: clone.slug,
+      recovery_username: recoveryUsername,
+      recovery_domain: clone.domain || tenant.domain || null
+    }
+  });
+
+  res.json({
+    ok: true,
+    recovery: {
+      clone_id: clone.id,
+      clone_name: clone.name,
+      tenant_id: clone.tenant_id,
+      domain: clone.domain || tenant.domain || null,
+      username: recoveryUsername,
+      full_name: recoveryFullName,
+      temporary_password: temporaryPassword,
+      role: 'admin'
+    }
+  });
+});
+
 app.post('/api/clones/:id/template-refresh', requireSuperAdmin, async (req, res) => {
   const existing = await db.get('SELECT id, tenant_id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) {
@@ -2439,7 +2564,8 @@ app.get('/api/backup', requireSuperAdmin, async (req, res) => {
     visits: await db.all('SELECT * FROM visits'),
     expenses: await db.all('SELECT * FROM expenses'),
     reservations: await db.all('SELECT * FROM reservations'),
-    clones: await db.all('SELECT * FROM clones')
+    clones: await db.all('SELECT * FROM clones'),
+    admin_audit_logs: await db.all('SELECT * FROM admin_audit_logs')
   };
 
   res.json({
@@ -2454,6 +2580,7 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
 
   const { data } = payload;
   const deleteOrder = [
+    'admin_audit_logs',
     'tenant_features',
     'reservations',
     'availability',
@@ -2483,7 +2610,8 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'visits',
     'expenses',
     'reservations',
-    'clones'
+    'clones',
+    'admin_audit_logs'
   ];
 
   const insertMany = async (table, rows) => {

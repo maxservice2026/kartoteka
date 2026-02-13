@@ -2039,6 +2039,9 @@ function renderSettingsLists() {
   document.querySelectorAll('.settings-item button[data-action="template"]').forEach((button) => {
     button.addEventListener('click', () => openCloneTemplateModal(button.dataset.id));
   });
+  document.querySelectorAll('.settings-item button[data-action="recover"]').forEach((button) => {
+    button.addEventListener('click', () => recoverCloneAdminAccess(button.dataset.id));
+  });
   document.querySelectorAll('.settings-item button[data-action="delete"]').forEach((button) => {
     if (button.dataset.section === 'users') {
       button.addEventListener('click', () => deleteUser(button.dataset.id));
@@ -2095,11 +2098,43 @@ function cloneItemTemplate(clone) {
       </span>
       <div class="settings-actions">
         <button class="ghost" data-action="template" data-id="${clone.id}">Šablona</button>
+        <button class="ghost" data-action="recover" data-id="${clone.id}">Obnova přístupu</button>
         <button class="ghost" data-action="edit" data-section="clones" data-id="${clone.id}">Upravit</button>
         <button class="ghost" data-action="delete" data-section="clones" data-id="${clone.id}">Smazat</button>
       </div>
     </div>
   `;
+}
+
+async function recoverCloneAdminAccess(cloneId) {
+  const clone = state.clones.find((item) => item.id === cloneId);
+  if (!clone) return;
+
+  const ok = confirm(`Obnovit přístup administrátora pro klon "${clone.name}"?`);
+  if (!ok) return;
+
+  const data = await api.post(`/api/clones/${cloneId}/recover-admin`, {});
+  const recovery = data.recovery || {};
+  const domainLabel = recovery.domain || clone.domain || '(není nastavená doména)';
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Obnova přístupu: ${clone.name}</h2>
+        <div class="meta">Jednorázově vygenerované přihlašovací údaje pro recovery admina.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    <div class="modal-grid">
+      <div class="panel">
+        <div class="field"><label>Doména klonu</label><input type="text" readonly value="${escapeHtml(domainLabel)}" /></div>
+        <div class="field"><label>Uživatelské jméno</label><input type="text" readonly value="${escapeHtml(recovery.username || '')}" /></div>
+        <div class="field"><label>Dočasné heslo</label><input type="text" readonly value="${escapeHtml(recovery.temporary_password || '')}" /></div>
+        <div class="meta">Po přihlášení heslo ihned změňte v nastavení uživatele.</div>
+      </div>
+    </div>
+  `);
+  document.getElementById('closeModal').addEventListener('click', closeModal);
 }
 
 async function openCloneTemplateModal(cloneId) {
