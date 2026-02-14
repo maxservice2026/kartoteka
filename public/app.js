@@ -22,40 +22,18 @@ const dom = {
   skinType: document.getElementById('skinType'),
   skinNotes: document.getElementById('skinNotes'),
   cream: document.getElementById('cream'),
-  cosmeticSchemaFields: document.getElementById('cosmeticSchemaFields'),
   servicePicker: document.getElementById('servicePicker'),
-  serviceFormCosmetic: document.getElementById('serviceFormCosmetic'),
   serviceFormGeneric: document.getElementById('serviceFormGeneric'),
-  treatmentType: document.getElementById('treatmentType'),
-  addonsList: document.getElementById('addonsList'),
-  basePrice: document.getElementById('basePrice'),
-  addonsTotal: document.getElementById('addonsTotal'),
-  schemaExtras: document.getElementById('schemaExtras'),
-  manualTotal: document.getElementById('manualTotal'),
-  finalTotal: document.getElementById('finalTotal'),
-  worker: document.getElementById('worker'),
-  paymentMethod: document.getElementById('paymentMethod'),
-  visitNote: document.getElementById('visitNote'),
-  visitDate: document.getElementById('visitDate'),
   genericSchemaFields: document.getElementById('genericSchemaFields'),
-  genericLegacyFields: document.getElementById('genericLegacyFields'),
-  genText1: document.getElementById('genText1'),
-  genText2: document.getElementById('genText2'),
-  genText3: document.getElementById('genText3'),
-  genSelect1: document.getElementById('genSelect1'),
-  genSelect2: document.getElementById('genSelect2'),
-  genSelect3: document.getElementById('genSelect3'),
   genPrice: document.getElementById('genPrice'),
   genDate: document.getElementById('genDate'),
   genSchemaExtras: document.getElementById('genSchemaExtras'),
-  genFinalTotal: document.getElementById('genFinalTotal'),
   genWorker: document.getElementById('genWorker'),
   genPaymentMethod: document.getElementById('genPaymentMethod'),
   genNote: document.getElementById('genNote'),
   visitsList: document.getElementById('visitsList'),
   btnNew: document.getElementById('btnNew'),
   btnSave: document.getElementById('btnSave'),
-  btnAddVisit: document.getElementById('btnAddVisit'),
   btnAddGeneric: document.getElementById('btnAddGeneric'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
@@ -1152,35 +1130,11 @@ function renderSettingsInputs() {
     .map((item) => `<option value="${item.id}">${item.name}</option>`)
     .join('');
 
-  dom.treatmentType.innerHTML = '<option value="">—</option>' + state.settings.treatments
-    .map((item) => `<option value="${item.id}" data-price="${item.price}">${item.name}</option>`)
-    .join('');
-
-  dom.addonsList.innerHTML = state.settings.addons
-    .map((item) => {
-      return `
-        <label class="addon-item">
-          <span>
-            <input type="checkbox" value="${item.id}" data-price="${item.price}" />
-            ${item.name}
-          </span>
-          <span>${formatCzk(item.price)}</span>
-        </label>
-      `;
-    })
-    .join('');
-
   const workerOptions = '<option value="">—</option>' + state.settings.workers
     .map((item) => `<option value="${item.id}">${item.name}</option>`)
     .join('');
-  dom.worker.innerHTML = workerOptions;
   dom.genWorker.innerHTML = workerOptions;
-  applyDefaultWorker(dom.worker);
   applyDefaultWorker(dom.genWorker);
-
-  dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
-    input.addEventListener('change', updatePricePreview);
-  });
 }
 
 function getDefaultWorkerId() {
@@ -1202,7 +1156,6 @@ function renderServiceButtons(autoSelect = false) {
   if (!dom.servicePicker) return;
   if (!state.settings.services.length) {
     dom.servicePicker.innerHTML = '<div class="hint">V nastavení zatím nejsou žádné služby.</div>';
-    dom.serviceFormCosmetic.classList.add('hidden');
     dom.serviceFormGeneric.classList.add('hidden');
     return;
   }
@@ -1227,7 +1180,6 @@ function renderServiceButtons(autoSelect = false) {
   } else if (state.selectedServiceId) {
     selectService(state.selectedServiceId);
   } else {
-    dom.serviceFormCosmetic.classList.add('hidden');
     dom.serviceFormGeneric.classList.add('hidden');
   }
 }
@@ -1246,23 +1198,13 @@ function selectService(id) {
     button.classList.toggle('active', button.dataset.id === id);
   });
 
-  if (service.form_type === 'cosmetic') {
-    dom.serviceFormCosmetic.classList.remove('hidden');
-    dom.serviceFormGeneric.classList.add('hidden');
-    if (dom.genericLegacyFields) dom.genericLegacyFields.classList.remove('hidden');
-  } else {
-    dom.serviceFormCosmetic.classList.add('hidden');
-    dom.serviceFormGeneric.classList.remove('hidden');
-    const hasSchemaFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
-    if (dom.genericLegacyFields) {
-      dom.genericLegacyFields.classList.toggle('hidden', hasSchemaFields);
-    }
-  }
+  dom.serviceFormGeneric.classList.remove('hidden');
 
   if (previous !== id || schemaChanged) {
     resetVisitFields();
   } else {
-    updateActivePricePreview();
+    renderActiveSchemaFields();
+    updateGenericPricePreview();
   }
 }
 
@@ -1336,25 +1278,6 @@ function setFormValues(client) {
 }
 
 function resetVisitFields() {
-  dom.treatmentType.value = '';
-  dom.manualTotal.value = '';
-  dom.paymentMethod.value = 'cash';
-  dom.visitNote.value = '';
-  dom.visitDate.value = todayLocal();
-  dom.worker.value = getDefaultWorkerId();
-  dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
-    input.checked = false;
-  });
-  if (dom.cosmeticSchemaFields) {
-    dom.cosmeticSchemaFields.innerHTML = '';
-  }
-  dom.schemaExtras.value = '';
-  dom.genText1.value = '';
-  dom.genText2.value = '';
-  dom.genText3.value = '';
-  dom.genSelect1.value = '';
-  dom.genSelect2.value = '';
-  dom.genSelect3.value = '';
   dom.genPrice.value = '';
   dom.genDate.value = todayLocal();
   dom.genWorker.value = getDefaultWorkerId();
@@ -1364,9 +1287,8 @@ function resetVisitFields() {
     dom.genericSchemaFields.innerHTML = '';
   }
   dom.genSchemaExtras.value = '';
-  dom.genFinalTotal.value = '';
   renderActiveSchemaFields();
-  updateActivePricePreview();
+  updateGenericPricePreview();
 }
 
 function clearSelection() {
@@ -1487,116 +1409,20 @@ async function createClient(selectService = false) {
   }
 }
 
-function updatePricePreview() {
-  const treatment = state.settings.treatments.find((item) => item.id === dom.treatmentType.value);
-  const basePrice = treatment ? Number(treatment.price) : 0;
-  const addonsTotal = Array.from(dom.addonsList.querySelectorAll('input[type="checkbox"]'))
-    .filter((input) => input.checked)
-    .reduce((sum, input) => sum + Number(input.dataset.price || 0), 0);
-
-  const manual = dom.manualTotal.value !== '' ? Number(dom.manualTotal.value) : null;
-  const base = manual !== null && !Number.isNaN(manual) ? manual : basePrice + addonsTotal;
-
-  const schemaValues = collectSchemaValues(dom.cosmeticSchemaFields, state.selectedServiceSchema);
-  const schemaExtras = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
-  const finalPrice = base + schemaExtras;
-
-  dom.basePrice.value = formatCzk(basePrice);
-  dom.addonsTotal.value = formatCzk(addonsTotal);
-  dom.schemaExtras.value = formatCzk(schemaExtras);
-  dom.finalTotal.value = formatCzk(finalPrice);
-}
-
 function updateGenericPricePreview() {
-  const raw = dom.genPrice.value !== '' ? Number(dom.genPrice.value) : 0;
-  const base = Number.isFinite(raw) ? raw : 0;
   const schemaValues = collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema);
-  const schemaExtras = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
-  dom.genSchemaExtras.value = formatCzk(schemaExtras);
-  dom.genFinalTotal.value = formatCzk(base + schemaExtras);
-}
+  const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
+  dom.genSchemaExtras.value = formatCzk(schemaPrice);
 
-function selectedService() {
-  return state.settings.services.find((item) => item.id === state.selectedServiceId) || null;
+  // "Celkem (ručně)" je finální cena. Pokud není vyplněná a karta dává cenu, předvyplníme ji.
+  if (dom.genPrice.value === '' && schemaPrice > 0) {
+    dom.genPrice.value = String(schemaPrice);
+  }
 }
 
 function renderActiveSchemaFields() {
-  const service = selectedService();
   const schema = state.selectedServiceSchema;
-  if (!service) return;
-
-  if (service.form_type === 'cosmetic') {
-    renderSchemaFields(dom.cosmeticSchemaFields, schema, updatePricePreview);
-    if (dom.genericSchemaFields) dom.genericSchemaFields.innerHTML = '';
-    if (dom.genericLegacyFields) dom.genericLegacyFields.classList.remove('hidden');
-  } else {
-    renderSchemaFields(dom.genericSchemaFields, schema, updateGenericPricePreview);
-    if (dom.cosmeticSchemaFields) dom.cosmeticSchemaFields.innerHTML = '';
-    const hasSchemaFields = !!(schema && Array.isArray(schema.fields) && schema.fields.length);
-    if (dom.genericLegacyFields) {
-      dom.genericLegacyFields.classList.toggle('hidden', hasSchemaFields);
-    }
-  }
-}
-
-function updateActivePricePreview() {
-  const service = selectedService();
-  if (!service) return;
-  if (service.form_type === 'cosmetic') {
-    updatePricePreview();
-  } else {
-    updateGenericPricePreview();
-  }
-}
-
-async function addVisit() {
-  if (!state.selectedServiceId) {
-    alert('Vyber službu.');
-    return;
-  }
-
-  const service = state.settings.services.find((item) => item.id === state.selectedServiceId);
-  if (!service || service.form_type !== 'cosmetic') {
-    alert('Vybraná služba nemá kosmetický formulář.');
-    return;
-  }
-
-  const clientId = await saveClient();
-  if (!clientId) return;
-
-  const treatmentId = dom.treatmentType.value || null;
-  if (!treatmentId) {
-    const proceed = confirm('Nebyl vybraný typ ošetření. Chceš přesto uložit návštěvu?');
-    if (!proceed) return;
-  }
-
-  if (!dom.worker.value) {
-    alert('Vyber pracovníka pro ekonomiku.');
-    return;
-  }
-
-  const addons = Array.from(dom.addonsList.querySelectorAll('input[type="checkbox"]'))
-    .filter((input) => input.checked)
-    .map((input) => input.value);
-
-  const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
-  const schemaData = schemaHasFields ? collectSchemaValues(dom.cosmeticSchemaFields, state.selectedServiceSchema) : null;
-
-  await api.post(`/api/clients/${clientId}/visits`, {
-    date: dom.visitDate.value || todayLocal(),
-    service_id: state.selectedServiceId,
-    treatment_id: treatmentId,
-    addons,
-    manual_total: dom.manualTotal.value,
-    note: dom.visitNote.value.trim(),
-    worker_id: dom.worker.value,
-    payment_method: dom.paymentMethod.value,
-    ...(schemaData ? { service_data: schemaData } : {})
-  });
-
-  resetVisitFields();
-  await loadVisits(clientId);
-  await loadSummary();
+  renderSchemaFields(dom.genericSchemaFields, schema, updateGenericPricePreview);
 }
 
 async function addGenericVisit() {
@@ -1606,8 +1432,8 @@ async function addGenericVisit() {
   }
 
   const service = state.settings.services.find((item) => item.id === state.selectedServiceId);
-  if (!service || service.form_type === 'cosmetic') {
-    alert('Vybraná služba nemá obecný formulář.');
+  if (!service) {
+    alert('Vybraná služba neexistuje.');
     return;
   }
 
@@ -1619,22 +1445,18 @@ async function addGenericVisit() {
     return;
   }
 
-  if (!dom.genPrice.value) {
-    alert('Vyplň cenu služby.');
-    return;
-  }
-
-  const serviceData = {
-    text1: dom.genText1.value.trim(),
-    text2: dom.genText2.value.trim(),
-    text3: dom.genText3.value.trim(),
-    select1: dom.genSelect1.value,
-    select2: dom.genSelect2.value,
-    select3: dom.genSelect3.value
-  };
-
   const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
-  const schemaData = schemaHasFields ? collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema) : null;
+  const schemaData = schemaHasFields ? collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema) : {};
+  const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaData);
+
+  if (!dom.genPrice.value) {
+    if (schemaPrice > 0) {
+      dom.genPrice.value = String(schemaPrice);
+    } else {
+      alert('Vyplň cenu služby.');
+      return;
+    }
+  }
 
   await api.post(`/api/clients/${clientId}/visits`, {
     date: dom.genDate.value || todayLocal(),
@@ -1643,7 +1465,7 @@ async function addGenericVisit() {
     note: dom.genNote.value.trim(),
     worker_id: dom.genWorker.value,
     payment_method: dom.genPaymentMethod.value,
-    service_data: schemaData || serviceData
+    service_data: schemaData
   });
 
   resetVisitFields();

@@ -82,156 +82,22 @@
               </div>
               <div class="service-picker" id="servicePicker"></div>
 
-              <div id="serviceFormCosmetic" class="service-form hidden">
-                <div class="field">
-                  <label>Typ pleti</label>
-                  <select id="skinType"></select>
-                </div>
-                <div class="field">
-                  <label>Péče o pleť</label>
-                  <textarea id="skinNotes" rows="3" placeholder="Doplňující informace"></textarea>
-                </div>
-                <div class="field">
-                  <label>Krém</label>
-                  <input id="cream" type="text" placeholder="Krém" />
-                </div>
-
-                <div id="cosmeticSchemaFields" class="custom-fields"></div>
-
-                <div class="field">
-                  <label>Typ ošetření</label>
-                  <select id="treatmentType"></select>
-                </div>
-
-                <div class="addon-block">
-                  <div class="addon-title">Příplatky</div>
-                  <div id="addonsList" class="addon-list"></div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <label>Základní cena</label>
-                    <input id="basePrice" type="text" readonly />
-                  </div>
-                  <div class="field">
-                    <label>Příplatky celkem</label>
-                    <input id="addonsTotal" type="text" readonly />
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label>Příplatky z karty</label>
-                  <input id="schemaExtras" type="text" readonly />
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <label>Cena (základ) ručně</label>
-                    <input id="manualTotal" type="number" min="0" step="1" placeholder="Volitelně" />
-                  </div>
-                  <div class="field">
-                    <label>Výsledná cena</label>
-                    <input id="finalTotal" type="text" readonly />
-                  </div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                  <label>Uživatel (pro ekonomiku)</label>
-                    <select id="worker"></select>
-                  </div>
-                  <div class="field">
-                    <label>Platba</label>
-                    <select id="paymentMethod">
-                      <option value="cash">Hotově</option>
-                      <option value="transfer">Převodem</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div class="field">
-                  <label>Poznámka</label>
-                  <textarea id="visitNote" rows="3" placeholder="Poznámka ke službě"></textarea>
-                </div>
-                <div class="field">
-                  <label>Datum služby</label>
-                  <input id="visitDate" type="date" />
-                </div>
-
-                <div class="actions-row">
-                  <button type="button" id="btnAddVisit" class="primary">Uložit službu</button>
-                </div>
-              </div>
-
               <div id="serviceFormGeneric" class="service-form hidden">
                 <div id="genericSchemaFields" class="custom-fields"></div>
-                <div id="genericLegacyFields">
                 <div class="field-row">
                   <div class="field">
-                    <label>Pole 1</label>
-                    <input id="genText1" type="text" />
-                  </div>
-                  <div class="field">
-                    <label>Pole 2</label>
-                    <input id="genText2" type="text" />
-                  </div>
-                </div>
-                <div class="field">
-                  <label>Pole 3</label>
-                  <input id="genText3" type="text" />
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <label>Výběr 1</label>
-                    <select id="genSelect1">
-                      <option value="">—</option>
-                      <option value="A">Možnost A</option>
-                      <option value="B">Možnost B</option>
-                      <option value="C">Možnost C</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label>Výběr 2</label>
-                    <select id="genSelect2">
-                      <option value="">—</option>
-                      <option value="A">Možnost A</option>
-                      <option value="B">Možnost B</option>
-                      <option value="C">Možnost C</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="field">
-                  <label>Výběr 3</label>
-                  <select id="genSelect3">
-                    <option value="">—</option>
-                    <option value="A">Možnost A</option>
-                    <option value="B">Možnost B</option>
-                    <option value="C">Možnost C</option>
-                  </select>
-                </div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <label>Cena služby</label>
-                    <input id="genPrice" type="number" min="0" step="1" />
-                  </div>
-                  <div class="field">
-                    <label>Datum služby</label>
-                    <input id="genDate" type="date" />
-                  </div>
-                </div>
-
-                <div class="field-row">
-                  <div class="field">
-                    <label>Příplatky z karty</label>
+                    <label>Cena z karty (automaticky)</label>
                     <input id="genSchemaExtras" type="text" readonly />
                   </div>
                   <div class="field">
-                    <label>Výsledná cena</label>
-                    <input id="genFinalTotal" type="text" readonly />
+                    <label>Celkem (ručně)</label>
+                    <input id="genPrice" type="number" min="0" step="1" />
                   </div>
+                </div>
+
+                <div class="field">
+                  <label>Datum služby</label>
+                  <input id="genDate" type="date" />
                 </div>
 
                 <div class="field-row">
@@ -282,6 +148,18 @@
                 <div class="field">
                   <label>E-mail</label>
                   <input id="email" type="email" placeholder="E-mail" />
+                </div>
+                <div class="field">
+                  <label>Typ pleti</label>
+                  <select id="skinType"></select>
+                </div>
+                <div class="field">
+                  <label>Péče o pleť</label>
+                  <textarea id="skinNotes" rows="3" placeholder="Doplňující informace"></textarea>
+                </div>
+                <div class="field">
+                  <label>Krém</label>
+                  <input id="cream" type="text" placeholder="Krém" />
                 </div>
                 <div class="actions-row">
                   <button type="button" id="btnSave" class="ghost">Uložit kartu</button>
