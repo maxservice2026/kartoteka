@@ -2390,20 +2390,13 @@ async function openServiceDetailModal(serviceId) {
         <div class="panel-header">
           <div>
             <h3>Základní údaje</h3>
-            <div class="meta">Název a typ formuláře.</div>
+            <div class="meta">Název a délka služby.</div>
           </div>
         </div>
       <div class="field-row">
         <div class="field">
           <label>Název</label>
           <input id="serviceEditName" type="text" />
-        </div>
-        <div class="field">
-          <label>Formulář</label>
-          <select id="serviceEditForm">
-            <option value="cosmetic">Kosmetika (detailní)</option>
-            <option value="generic">Obecný</option>
-          </select>
         </div>
         <div class="field">
           <label>Délka (min)</label>
@@ -2420,42 +2413,12 @@ async function openServiceDetailModal(serviceId) {
         <div class="panel-header">
           <div>
             <h3>Karta služby</h3>
-            <div class="meta">Vlastní pole k této službě. Příplatky se přičtou k ceně.</div>
+            <div class="meta">Vlastní pole k této službě. Cena z karty se použije jako návrh (předvyplní „Celkem“).</div>
           </div>
           <button type="button" class="ghost" id="schemaAddField">Nové pole</button>
         </div>
         <div id="schemaBuilder" class="schema-builder"></div>
       </div>
-      ${settingsSectionTemplate({
-        title: 'Typy pleti',
-        subtitle: 'Používá se v kartě klientky.',
-        formId: 'skin',
-        listId: 'skinList',
-        fields: [
-          '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Citlivá" /></div>'
-        ]
-      })}
-      ${settingsSectionTemplate({
-        title: 'Typy ošetření',
-        subtitle: 'Název, cena a poznámka.',
-        formId: 'treatments',
-        listId: 'treatmentList',
-        fields: [
-          '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
-          '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>',
-          '<div class="field"><label>Poznámka</label><input type="text" data-field="note" /></div>'
-        ]
-      })}
-      ${settingsSectionTemplate({
-        title: 'Příplatky',
-        subtitle: 'Položky k ošetření.',
-        formId: 'addons',
-        listId: 'addonList',
-        fields: [
-          '<div class="field"><label>Název</label><input type="text" data-field="name" /></div>',
-          '<div class="field"><label>Cena</label><input type="number" data-field="price" min="0" step="1" /></div>'
-        ]
-      })}
     </div>
   `);
 
@@ -2465,10 +2428,8 @@ async function openServiceDetailModal(serviceId) {
   });
 
   const nameInput = document.getElementById('serviceEditName');
-  const formSelect = document.getElementById('serviceEditForm');
   const durationSelect = document.getElementById('serviceEditDuration');
   nameInput.value = service.name || '';
-  formSelect.value = service.form_type || 'generic';
   durationSelect.value = String(service.duration_minutes || 30);
 
   const schemaBuilder = document.getElementById('schemaBuilder');
@@ -2492,7 +2453,6 @@ async function openServiceDetailModal(serviceId) {
   document.getElementById('serviceSave').addEventListener('click', async () => {
     const payload = {
       name: nameInput.value.trim(),
-      form_type: formSelect.value,
       duration_minutes: durationSelect.value
     };
     if (!payload.name) {
@@ -2542,9 +2502,6 @@ async function openServiceDetailModal(serviceId) {
     await loadSettings();
     closeModal();
   });
-
-  renderSettingsLists();
-  wireSettingsForms();
 }
 
 async function openSettingsModal() {
@@ -2584,7 +2541,6 @@ async function openSettingsModal() {
       listId: 'serviceList',
       fields: [
         '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
-        '<div class="field"><label>Formulář</label><select data-field="form_type"><option value="cosmetic">Kosmetika (detailní)</option><option value="generic">Obecný</option></select></div>',
         '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
       ]
     })
@@ -2640,9 +2596,11 @@ function renderSettingsLists() {
   if (serviceList) {
     serviceList.innerHTML = state.settings.services
       .map((item) => {
-        const label = item.form_type === 'cosmetic' ? 'Kosmetika' : 'Obecný';
         const durationLabel = `${item.duration_minutes || 30} min`;
-        return settingsItemTemplate(item, `${label} • ${durationLabel}`, 'services');
+        const schema = parseServiceSchemaJson(item.form_schema_json);
+        const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
+        const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
+        return settingsItemTemplate(item, `${durationLabel} • ${schemaLabel}`, 'services');
       })
       .join('');
   }

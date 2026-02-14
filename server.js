@@ -2320,7 +2320,6 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   let addonRows = [];
   let addonsTotal = 0;
   let treatmentPrice = 0;
-  let total = 0;
   const schema = parseServiceSchemaJson(service.form_schema_json);
   const schemaResult = sanitizeServiceDataBySchema(schema, payload.service_data);
   const schemaExtrasTotal = toInt(schemaResult.extras_total, 0);
@@ -2340,13 +2339,21 @@ app.post('/api/clients/:id/visits', async (req, res) => {
 
     addonsTotal = addonRows.reduce((sum, item) => sum + toInt(item.price, 0), 0);
     treatmentPrice = treatment ? toInt(treatment.price, 0) : 0;
-    const base = manualTotal !== null ? manualTotal : treatmentPrice + addonsTotal;
-    total = base + schemaExtrasTotal;
-  } else {
-    if (manualTotal === null) {
-      return res.status(400).json({ error: 'manual_total is required' });
+  }
+
+  // Varianta B: "Celkem (ručně)" je finální cena a počítá se do ekonomiky.
+  // Pokud není vyplněná, použijeme cenu z karty (součet příplatků) jako návrh.
+  let finalTotal = manualTotal;
+  if (finalTotal === null) {
+    if (schemaExtrasTotal > 0) {
+      finalTotal = schemaExtrasTotal;
+    } else if (service.form_type === 'cosmetic') {
+      const legacyBase = treatmentPrice + addonsTotal;
+      if (legacyBase > 0) finalTotal = legacyBase;
     }
-    total = manualTotal + schemaExtrasTotal;
+  }
+  if (finalTotal === null) {
+    return res.status(400).json({ error: 'manual_total is required' });
   }
 
   const id = newId();
@@ -2373,8 +2380,8 @@ app.post('/api/clients/:id/visits', async (req, res) => {
       treatmentPrice,
       addonRows.length ? JSON.stringify(addonRows) : null,
       addonsTotal,
-      manualTotal,
-      total,
+      finalTotal,
+      finalTotal,
       serviceData,
       payload.note || null,
       workerId,
