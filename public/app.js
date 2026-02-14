@@ -2239,7 +2239,8 @@ function settingsSectionTemplate({
   subtitle,
   formId,
   fields,
-  listId
+  listId,
+  headerActionsHtml = ''
 }) {
   return `
     <div class="settings-section" data-form="${formId}">
@@ -2248,6 +2249,7 @@ function settingsSectionTemplate({
           <h3>${title}</h3>
           <div class="meta">${subtitle}</div>
         </div>
+        ${headerActionsHtml ? `<div class="actions-row">${headerActionsHtml}</div>` : ''}
       </div>
       <div class="field-row">
         ${fields.join('')}
@@ -2568,6 +2570,7 @@ async function openSettingsModal() {
           subtitle: 'Správa klonů aplikace pro další subjekty.',
           formId: 'clones',
           listId: 'cloneList',
+          headerActionsHtml: '<button type="button" class="ghost" id="btnCloneUsers">UŽIVATELÉ</button>',
           fields: [
             '<div class="field"><label>Název klonu</label><input type="text" data-field="name" placeholder="Např. Salon Brno" /></div>',
             '<div class="field"><label>Slug</label><input type="text" data-field="slug" placeholder="napr-salon-brno" /></div>',
@@ -2589,6 +2592,16 @@ async function openSettingsModal() {
   renderSettingsLists();
   wireSettingsForms();
   wireBrandSettings();
+
+  const btnCloneUsers = document.getElementById('btnCloneUsers');
+  if (btnCloneUsers) {
+    btnCloneUsers.addEventListener('click', () => {
+      const usersSection = document.querySelector('[data-form="users"]');
+      if (usersSection) {
+        usersSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    });
+  }
 }
 
 function renderSettingsLists() {
