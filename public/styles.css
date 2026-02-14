@@ -61,6 +61,15 @@ body::after {
   gap: 12px;
 }
 
+.brand-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
 .brand-icon {
   width: 44px;
   height: 44px;
@@ -776,8 +785,36 @@ button.primary:hover {
 
 .booking-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
+}
+
+.brand-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.tenant-logo-preview,
+.tenant-logo-placeholder {
+  width: 88px;
+  height: 88px;
+  border-radius: 16px;
+}
+
+.tenant-logo-preview {
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.tenant-logo-placeholder {
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
 }
 
 .slot-grid {

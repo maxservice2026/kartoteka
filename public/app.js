@@ -1,5 +1,7 @@
 const dom = {
   searchInput: document.getElementById('searchInput'),
+  brandTitle: document.getElementById('brandTitle'),
+  brandLogo: document.getElementById('brandLogo'),
   clientsList: document.getElementById('clientsList'),
   summaryCounts: document.getElementById('summaryCounts'),
   summaryStats: document.getElementById('summaryStats'),
@@ -63,6 +65,7 @@ const dom = {
 };
 
 const state = {
+  tenant: null,
   clients: [],
   selectedClientId: null,
   settings: {
@@ -128,6 +131,7 @@ const PRO_PREVIEW_MAP = {
 };
 
 let handleUnauthorized = () => {};
+let pendingTenantLogoData = null;
 
 const api = {
   async request(url, options = {}) {
@@ -273,6 +277,33 @@ function setAuthToken(token) {
   } else {
     localStorage.removeItem('kartoteka_token');
   }
+}
+
+function resolveBrandTitle() {
+  if (state.tenant?.slug === 'default') return 'softmax.cz';
+  return state.tenant?.name || 'Kartotéka';
+}
+
+function renderBrand() {
+  const title = resolveBrandTitle();
+  const logoData = state.tenant?.logo_data || null;
+
+  if (dom.brandLogo) {
+    if (logoData) {
+      dom.brandLogo.src = logoData;
+      dom.brandLogo.classList.remove('hidden');
+    } else {
+      dom.brandLogo.removeAttribute('src');
+      dom.brandLogo.classList.add('hidden');
+    }
+  }
+
+  if (dom.brandTitle) {
+    dom.brandTitle.textContent = title;
+    dom.brandTitle.classList.toggle('hidden', !!logoData);
+  }
+
+  document.title = title;
 }
 
 function updateUserUi() {
@@ -480,6 +511,8 @@ async function loadFeatureMatrix() {
 async function bootstrapAuth() {
   const bootstrap = await api.get('/api/bootstrap');
   state.auth.hasUsers = bootstrap.has_users;
+  state.tenant = bootstrap.tenant || null;
+  renderBrand();
 
   const storedToken = localStorage.getItem('kartoteka_token');
   if (bootstrap.has_users && storedToken) {
@@ -487,6 +520,8 @@ async function bootstrapAuth() {
       const me = await api.get('/api/me');
       state.auth.user = me.user;
       setAuthToken(storedToken);
+      state.tenant = me.tenant || state.tenant;
+      renderBrand();
       hideAuthScreen();
       await onAuthenticated();
       return;
@@ -1652,6 +1687,112 @@ function openNotificationsModal() {
   document.getElementById('closeModal').addEventListener('click', closeModal);
 }
 
+function brandingSectionTemplate() {
+  return `
+    <div class="settings-section" data-form="branding">
+      <div class="panel-header">
+        <div>
+          <h3>Logo klonu</h3>
+          <div class="meta">Logo se zobrazuje vlevo nahoře v aplikaci i ve veřejné rezervaci.</div>
+        </div>
+      </div>
+      <div class="brand-settings">
+        <div>
+          <img id="tenantLogoPreview" class="tenant-logo-preview hidden" alt="Logo" />
+          <div id="tenantLogoPlaceholder" class="tenant-logo-placeholder">Bez loga</div>
+        </div>
+        <div style="flex:1; min-width: 260px;">
+          <div class="field">
+            <label>Nahrát logo (PNG/JPG)</label>
+            <input type="file" id="tenantLogoInput" accept="image/*" />
+          </div>
+          <div class="actions-row">
+            <button class="ghost" id="tenantLogoClear" type="button">Smazat logo</button>
+            <button class="primary" id="tenantLogoSave" type="button">Uložit logo</button>
+          </div>
+          <div class="hint">Doporučení: malé logo (např. do 200 KB).</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Nelze načíst soubor.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function updateTenantLogoPreview(logoData) {
+  const preview = document.getElementById('tenantLogoPreview');
+  const placeholder = document.getElementById('tenantLogoPlaceholder');
+  if (!preview || !placeholder) return;
+
+  if (logoData) {
+    preview.src = logoData;
+    preview.classList.remove('hidden');
+    placeholder.classList.add('hidden');
+  } else {
+    preview.removeAttribute('src');
+    preview.classList.add('hidden');
+    placeholder.classList.remove('hidden');
+  }
+}
+
+function wireBrandSettings() {
+  const input = document.getElementById('tenantLogoInput');
+  const btnSave = document.getElementById('tenantLogoSave');
+  const btnClear = document.getElementById('tenantLogoClear');
+  if (!input || !btnSave || !btnClear) return;
+
+  pendingTenantLogoData = null;
+  updateTenantLogoPreview(state.tenant?.logo_data || null);
+
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    if (file.size > 200 * 1024) {
+      alert('Logo je příliš velké. Zmenši ho (doporučeno do 200 KB).');
+      input.value = '';
+      return;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      pendingTenantLogoData = dataUrl;
+      updateTenantLogoPreview(dataUrl);
+    } catch (err) {
+      alert('Nelze načíst logo.');
+    }
+  });
+
+  btnSave.addEventListener('click', async () => {
+    if (!pendingTenantLogoData) {
+      alert('Vyber logo (soubor), které chceš uložit.');
+      return;
+    }
+    const result = await api.put('/api/tenant/logo', { logo_data: pendingTenantLogoData });
+    state.tenant = result.tenant || state.tenant;
+    pendingTenantLogoData = null;
+    renderBrand();
+    updateTenantLogoPreview(state.tenant?.logo_data || null);
+    input.value = '';
+  });
+
+  btnClear.addEventListener('click', async () => {
+    const ok = confirm('Opravdu smazat logo?');
+    if (!ok) return;
+    const result = await api.put('/api/tenant/logo', { clear: true });
+    state.tenant = result.tenant || state.tenant;
+    pendingTenantLogoData = null;
+    renderBrand();
+    updateTenantLogoPreview(null);
+    input.value = '';
+  });
+}
+
 
 function settingsSectionTemplate({
   title,
@@ -1920,7 +2061,13 @@ async function openSettingsModal() {
   document.getElementById('closeModal').addEventListener('click', closeModal);
 
   const grid = document.getElementById('settingsGrid');
-  const sections = [
+  const sections = [];
+
+  if (state.auth.user?.role === 'admin') {
+    sections.push(brandingSectionTemplate());
+  }
+
+  sections.push(
     settingsSectionTemplate({
       title: 'Služby',
       subtitle: 'Hlavní služby pro výběr v kartě klientky.',
@@ -1932,7 +2079,7 @@ async function openSettingsModal() {
         '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
       ]
     })
-  ];
+  );
 
   if (state.auth.user?.role === 'admin') {
     sections.push(
@@ -1976,6 +2123,7 @@ async function openSettingsModal() {
 
   renderSettingsLists();
   wireSettingsForms();
+  wireBrandSettings();
 }
 
 function renderSettingsLists() {

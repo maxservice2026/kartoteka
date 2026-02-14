@@ -9,7 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 8788;
 const SESSION_DAYS = 30;
 const DEFAULT_TENANT_SLUG = normalizeSlug(process.env.DEFAULT_TENANT_SLUG || 'default') || 'default';
-const DEFAULT_TENANT_NAME = (process.env.DEFAULT_TENANT_NAME || 'PRETTY VISAGE 2').toString().trim();
+const DEFAULT_TENANT_NAME = (process.env.DEFAULT_TENANT_NAME || 'softmax.cz').toString().trim();
 const DEFAULT_TENANT_PLAN = (process.env.DEFAULT_TENANT_PLAN || 'enterprise').toString().trim().toLowerCase();
 const FEATURE_DEFINITIONS = [
   { key: 'economy', label: 'Ekonomika', defaults: { basic: false, pro: true, enterprise: true } },
@@ -210,7 +210,7 @@ async function findTenantBySlug(slug) {
   const normalized = normalizeSlug(slug);
   if (!normalized) return null;
   return db.get(
-    'SELECT id, name, slug, domain FROM tenants WHERE active = 1 AND slug = ?',
+    'SELECT id, name, slug, domain, logo_data FROM tenants WHERE active = 1 AND slug = ?',
     [normalized]
   );
 }
@@ -219,7 +219,7 @@ async function findTenantByDomain(domain) {
   const normalized = normalizeHost(domain);
   if (!normalized) return null;
   return db.get(
-    'SELECT id, name, slug, domain FROM tenants WHERE active = 1 AND LOWER(domain) = ?',
+    'SELECT id, name, slug, domain, logo_data FROM tenants WHERE active = 1 AND LOWER(domain) = ?',
     [normalized]
   );
 }
@@ -243,7 +243,7 @@ async function ensureTenantRecord({ name, slug, domain }) {
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [tenantId, (name || normalizedSlug).toString().trim() || normalizedSlug, normalizedSlug, normalizedDomain || null, 1, now, now]
     );
-    tenant = await db.get('SELECT id, name, slug, domain FROM tenants WHERE id = ?', [tenantId]);
+    tenant = await db.get('SELECT id, name, slug, domain, logo_data FROM tenants WHERE id = ?', [tenantId]);
     return tenant;
   }
 
@@ -251,13 +251,13 @@ async function ensureTenantRecord({ name, slug, domain }) {
     'UPDATE tenants SET name = ?, domain = ?, updated_at = ? WHERE id = ?',
     [(name || tenant.name || normalizedSlug).toString().trim() || normalizedSlug, normalizedDomain || tenant.domain || null, now, tenant.id]
   );
-  return db.get('SELECT id, name, slug, domain FROM tenants WHERE id = ?', [tenant.id]);
+  return db.get('SELECT id, name, slug, domain, logo_data FROM tenants WHERE id = ?', [tenant.id]);
 }
 
 async function getDefaultTenant() {
   if (defaultTenantId) {
     const cached = await db.get(
-      'SELECT id, name, slug, domain FROM tenants WHERE id = ? AND active = 1',
+      'SELECT id, name, slug, domain, logo_data FROM tenants WHERE id = ? AND active = 1',
       [defaultTenantId]
     );
     if (cached) return cached;
@@ -275,7 +275,7 @@ async function resolveTenantForRequest(req) {
   const requestedTenantId = (req.headers['x-tenant-id'] || req.query.tenant_id || '').toString().trim();
   if (requestedTenantId) {
     const tenant = await db.get(
-      'SELECT id, name, slug, domain FROM tenants WHERE id = ? AND active = 1',
+      'SELECT id, name, slug, domain, logo_data FROM tenants WHERE id = ? AND active = 1',
       [requestedTenantId]
     );
     if (tenant) return tenant;
@@ -470,6 +470,7 @@ async function initDb() {
       name TEXT NOT NULL,
       slug TEXT NOT NULL UNIQUE,
       domain TEXT UNIQUE,
+      logo_data TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -617,6 +618,7 @@ async function initDb() {
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('tenants', 'domain', 'TEXT');
+  await ensureColumn('tenants', 'logo_data', 'TEXT');
   await ensureColumn('tenants', 'active', 'INTEGER DEFAULT 1');
   await ensureColumn('tenants', 'updated_at', 'TEXT');
   await ensureColumn('users', 'tenant_id', 'TEXT');
@@ -1374,6 +1376,29 @@ app.get('/api/features', async (req, res) => {
 
 app.get('/api/settings', async (req, res) => {
   res.json(await getSettings(req.tenant.id));
+});
+
+app.put('/api/tenant/logo', requireAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const rawLogo = payload.logo_data === undefined ? '' : String(payload.logo_data || '').trim();
+  const clear = payload.clear === true || !rawLogo;
+  const logoData = clear ? null : rawLogo;
+
+  if (logoData) {
+    if (!logoData.startsWith('data:image/')) {
+      return res.status(400).json({ error: 'Logo musí být obrázek.' });
+    }
+    if (!logoData.includes('base64,')) {
+      return res.status(400).json({ error: 'Logo musí být ve formátu base64.' });
+    }
+    if (logoData.length > 250_000) {
+      return res.status(400).json({ error: 'Logo je příliš velké. Zmenšete soubor.' });
+    }
+  }
+
+  await db.run('UPDATE tenants SET logo_data = ?, updated_at = ? WHERE id = ?', [logoData, nowIso(), req.tenant.id]);
+  const tenant = await db.get('SELECT id, name, slug, domain, logo_data FROM tenants WHERE id = ?', [req.tenant.id]);
+  res.json({ ok: true, tenant });
 });
 
 app.get('/api/availability', requireFeature('calendar'), async (req, res) => {

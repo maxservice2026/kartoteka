@@ -1,4 +1,6 @@
 const dom = {
+  brandTitle: document.getElementById('bookingBrandTitle'),
+  brandLogo: document.getElementById('bookingBrandLogo'),
   services: document.getElementById('publicServices'),
   durationHint: document.getElementById('publicDurationHint'),
   selectedDate: document.getElementById('publicSelectedDate'),
@@ -37,6 +39,35 @@ function setResult(message, isError = false) {
     return;
   }
   dom.result.style.color = isError ? '#d0422b' : '#1f9a4c';
+}
+
+async function loadBranding() {
+  try {
+    const response = await fetch('/api/bootstrap');
+    const data = await response.json();
+    const tenant = data.tenant || {};
+    const title = tenant.slug === 'default' ? 'softmax.cz' : tenant.name || 'Kartotéka';
+    const logoData = tenant.logo_data || null;
+
+    if (dom.brandLogo) {
+      if (logoData) {
+        dom.brandLogo.src = logoData;
+        dom.brandLogo.classList.remove('hidden');
+      } else {
+        dom.brandLogo.removeAttribute('src');
+        dom.brandLogo.classList.add('hidden');
+      }
+    }
+
+    if (dom.brandTitle) {
+      dom.brandTitle.textContent = title;
+      dom.brandTitle.classList.toggle('hidden', !!logoData);
+    }
+
+    document.title = `Rezervace – ${title}`;
+  } catch (err) {
+    // ignore
+  }
 }
 
 async function fetchServices() {
@@ -382,6 +413,7 @@ async function submitReservation() {
 }
 
 async function init() {
+  await loadBranding();
   state.selectedDate = todayLocal();
   setDateMapMonthFromSelection();
   await fetchServices();
