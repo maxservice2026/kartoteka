@@ -992,7 +992,7 @@ async function onAuthenticated() {
   await loadClients();
   await loadSummary();
   clearSelection();
-  updatePricePreview();
+  updateGenericPricePreview();
 }
 
 async function loadFeatureAccess() {
@@ -2975,7 +2975,6 @@ function wireEvents() {
   dom.btnCreateClient.addEventListener('click', () => createClient(false));
   dom.btnCreateClientAndService.addEventListener('click', () => createClient(true));
   dom.btnSave.addEventListener('click', saveClient);
-  dom.btnAddVisit.addEventListener('click', addVisit);
   dom.btnAddGeneric.addEventListener('click', addGenericVisit);
   if (dom.btnToggleClient) {
     dom.btnToggleClient.addEventListener('click', () => {
@@ -3005,13 +3004,11 @@ function wireEvents() {
     });
   }
   dom.btnLogout.addEventListener('click', handleLogout);
-  dom.treatmentType.addEventListener('change', updatePricePreview);
-  dom.manualTotal.addEventListener('input', updatePricePreview);
   dom.genPrice.addEventListener('input', updateGenericPricePreview);
 }
 
 async function init() {
-  dom.visitDate.value = todayLocal();
+  dom.genDate.value = todayLocal();
   setClientDetailsOpen(false);
   wireEvents();
   updateUserUi();
