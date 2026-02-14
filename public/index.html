@@ -96,6 +96,8 @@
                   <input id="cream" type="text" placeholder="Krém" />
                 </div>
 
+                <div id="cosmeticSchemaFields" class="custom-fields"></div>
+
                 <div class="field">
                   <label>Typ ošetření</label>
                   <select id="treatmentType"></select>
@@ -117,9 +119,14 @@
                   </div>
                 </div>
 
+                <div class="field">
+                  <label>Příplatky z karty</label>
+                  <input id="schemaExtras" type="text" readonly />
+                </div>
+
                 <div class="field-row">
                   <div class="field">
-                    <label>Cena celkem (ručně)</label>
+                    <label>Cena (základ) ručně</label>
                     <input id="manualTotal" type="number" min="0" step="1" placeholder="Volitelně" />
                   </div>
                   <div class="field">
@@ -157,6 +164,8 @@
               </div>
 
               <div id="serviceFormGeneric" class="service-form hidden">
+                <div id="genericSchemaFields" class="custom-fields"></div>
+                <div id="genericLegacyFields">
                 <div class="field-row">
                   <div class="field">
                     <label>Pole 1</label>
@@ -201,6 +210,7 @@
                     <option value="C">Možnost C</option>
                   </select>
                 </div>
+                </div>
 
                 <div class="field-row">
                   <div class="field">
@@ -210,6 +220,17 @@
                   <div class="field">
                     <label>Datum služby</label>
                     <input id="genDate" type="date" />
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <div class="field">
+                    <label>Příplatky z karty</label>
+                    <input id="genSchemaExtras" type="text" readonly />
+                  </div>
+                  <div class="field">
+                    <label>Výsledná cena</label>
+                    <input id="genFinalTotal" type="text" readonly />
                   </div>
                 </div>
 

@@ -22,6 +22,7 @@ const dom = {
   skinType: document.getElementById('skinType'),
   skinNotes: document.getElementById('skinNotes'),
   cream: document.getElementById('cream'),
+  cosmeticSchemaFields: document.getElementById('cosmeticSchemaFields'),
   servicePicker: document.getElementById('servicePicker'),
   serviceFormCosmetic: document.getElementById('serviceFormCosmetic'),
   serviceFormGeneric: document.getElementById('serviceFormGeneric'),
@@ -29,12 +30,15 @@ const dom = {
   addonsList: document.getElementById('addonsList'),
   basePrice: document.getElementById('basePrice'),
   addonsTotal: document.getElementById('addonsTotal'),
+  schemaExtras: document.getElementById('schemaExtras'),
   manualTotal: document.getElementById('manualTotal'),
   finalTotal: document.getElementById('finalTotal'),
   worker: document.getElementById('worker'),
   paymentMethod: document.getElementById('paymentMethod'),
   visitNote: document.getElementById('visitNote'),
   visitDate: document.getElementById('visitDate'),
+  genericSchemaFields: document.getElementById('genericSchemaFields'),
+  genericLegacyFields: document.getElementById('genericLegacyFields'),
   genText1: document.getElementById('genText1'),
   genText2: document.getElementById('genText2'),
   genText3: document.getElementById('genText3'),
@@ -43,6 +47,8 @@ const dom = {
   genSelect3: document.getElementById('genSelect3'),
   genPrice: document.getElementById('genPrice'),
   genDate: document.getElementById('genDate'),
+  genSchemaExtras: document.getElementById('genSchemaExtras'),
+  genFinalTotal: document.getElementById('genFinalTotal'),
   genWorker: document.getElementById('genWorker'),
   genPaymentMethod: document.getElementById('genPaymentMethod'),
   genNote: document.getElementById('genNote'),
@@ -90,6 +96,8 @@ const state = {
     tenants: []
   },
   selectedServiceId: null,
+  selectedServiceSchema: null,
+  selectedServiceSchemaJson: null,
   auth: {
     token: null,
     user: null,
@@ -201,6 +209,540 @@ function formatCzk(value) {
   const numeric = Number(value);
   const safe = Number.isFinite(numeric) ? numeric : 0;
   return `${safe.toLocaleString('cs-CZ')} Kč`;
+}
+
+const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
+
+function randomId(prefix = 'id') {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return `${prefix}-${window.crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Math.random().toString(16).slice(2)}-${Date.now()}`;
+}
+
+function parseServiceSchemaJson(schemaJson) {
+  const raw = (schemaJson || '').toString().trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
+    const normalizedFields = fields
+      .map((field) => ({
+        id: (field.id || '').toString().trim(),
+        type: (field.type || '').toString().trim(),
+        label: (field.label || '').toString().trim(),
+        required: field.required === true || field.required === 1 || field.required === '1',
+        price_delta: Number(field.price_delta) || 0,
+        options: Array.isArray(field.options) ? field.options : []
+      }))
+      .filter((field) => field.id && field.label && SERVICE_FIELD_TYPES.has(field.type));
+
+    normalizedFields.forEach((field) => {
+      if (field.type === 'select' || field.type === 'multiselect') {
+        field.options = field.options
+          .map((opt) => ({
+            id: (opt.id || '').toString().trim(),
+            label: (opt.label || '').toString().trim(),
+            price_delta: Number(opt.price_delta) || 0
+          }))
+          .filter((opt) => opt.id && opt.label);
+      } else {
+        field.options = [];
+      }
+    });
+
+    return { version: 1, fields: normalizedFields };
+  } catch (err) {
+    return null;
+  }
+}
+
+function collectSchemaValues(container, schema) {
+  const values = {};
+  if (!container || !schema || !Array.isArray(schema.fields)) return values;
+
+  schema.fields.forEach((field) => {
+    if (field.type === 'heading') return;
+    const selector = `[data-schema-field="${CSS.escape(field.id)}"]`;
+    const input = container.querySelector(selector);
+
+    if (field.type === 'checkbox') {
+      values[field.id] = Boolean(input && input.checked);
+      return;
+    }
+
+    if (field.type === 'multiselect') {
+      const checks = Array.from(container.querySelectorAll(`[data-schema-field="${CSS.escape(field.id)}"][data-schema-option]`));
+      values[field.id] = checks.filter((item) => item.checked).map((item) => item.dataset.schemaOption);
+      return;
+    }
+
+    if (!input) return;
+
+    if (field.type === 'number') {
+      const raw = input.value === '' ? null : Number(input.value);
+      if (raw !== null && Number.isFinite(raw)) {
+        values[field.id] = raw;
+      }
+      return;
+    }
+
+    values[field.id] = input.value;
+  });
+
+  return values;
+}
+
+function computeSchemaExtras(schema, values) {
+  if (!schema || !Array.isArray(schema.fields)) return 0;
+  let total = 0;
+  schema.fields.forEach((field) => {
+    if (field.type === 'checkbox') {
+      if (values[field.id]) total += Number(field.price_delta) || 0;
+      return;
+    }
+    if (field.type === 'select') {
+      const selected = values[field.id];
+      const option = (field.options || []).find((opt) => opt.id === selected);
+      if (option) total += Number(option.price_delta) || 0;
+      return;
+    }
+    if (field.type === 'multiselect') {
+      const selected = Array.isArray(values[field.id]) ? values[field.id] : [];
+      const optionMap = new Map((field.options || []).map((opt) => [opt.id, opt]));
+      selected.forEach((id) => {
+        const option = optionMap.get(id);
+        if (option) total += Number(option.price_delta) || 0;
+      });
+    }
+  });
+  return total;
+}
+
+function formatSignedCzk(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric === 0) return '';
+  const abs = Math.abs(numeric);
+  const formatted = `${abs.toLocaleString('cs-CZ')} Kč`;
+  return numeric > 0 ? `+${formatted}` : `-${formatted}`;
+}
+
+function renderSchemaFields(container, schema, onChange) {
+  if (!container) return;
+  container.innerHTML = '';
+  if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return;
+
+  const title = document.createElement('div');
+  title.className = 'custom-title';
+  title.textContent = 'Doplňující údaje';
+  container.appendChild(title);
+
+  schema.fields.forEach((field) => {
+    if (field.type === 'heading') {
+      const heading = document.createElement('div');
+      heading.className = 'custom-title';
+      heading.textContent = field.label;
+      container.appendChild(heading);
+      return;
+    }
+
+    if (field.type === 'checkbox') {
+      const row = document.createElement('div');
+      row.className = 'custom-field-inline';
+
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.dataset.schemaField = field.id;
+
+      const label = document.createElement('label');
+      const price = formatSignedCzk(field.price_delta);
+      label.textContent = price ? `${field.label} (${price})` : field.label;
+
+      input.addEventListener('change', () => onChange && onChange());
+
+      row.appendChild(input);
+      row.appendChild(label);
+      container.appendChild(row);
+      return;
+    }
+
+    if (field.type === 'multiselect') {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'field';
+
+      const label = document.createElement('label');
+      label.textContent = field.label;
+      wrapper.appendChild(label);
+
+      const list = document.createElement('div');
+      list.className = 'addon-list';
+      (field.options || []).forEach((opt) => {
+        const item = document.createElement('label');
+        item.className = 'addon-item';
+        const left = document.createElement('span');
+        const price = formatSignedCzk(opt.price_delta);
+        left.textContent = price ? `${opt.label} (${price})` : opt.label;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.dataset.schemaField = field.id;
+        checkbox.dataset.schemaOption = opt.id;
+        checkbox.addEventListener('change', () => onChange && onChange());
+        item.appendChild(left);
+        item.appendChild(checkbox);
+        list.appendChild(item);
+      });
+      wrapper.appendChild(list);
+      container.appendChild(wrapper);
+      return;
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'field';
+
+    const label = document.createElement('label');
+    label.textContent = field.label;
+    wrapper.appendChild(label);
+
+    if (field.type === 'textarea') {
+      const textarea = document.createElement('textarea');
+      textarea.rows = 3;
+      textarea.dataset.schemaField = field.id;
+      textarea.addEventListener('input', () => onChange && onChange());
+      wrapper.appendChild(textarea);
+      container.appendChild(wrapper);
+      return;
+    }
+
+    if (field.type === 'select') {
+      const select = document.createElement('select');
+      select.dataset.schemaField = field.id;
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = '—';
+      select.appendChild(empty);
+      (field.options || []).forEach((opt) => {
+        const option = document.createElement('option');
+        option.value = opt.id;
+        const price = formatSignedCzk(opt.price_delta);
+        option.textContent = price ? `${opt.label} (${price})` : opt.label;
+        select.appendChild(option);
+      });
+      select.addEventListener('change', () => onChange && onChange());
+      wrapper.appendChild(select);
+      container.appendChild(wrapper);
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = field.type === 'number' ? 'number' : 'text';
+    if (field.type === 'number') {
+      input.step = '1';
+    }
+    input.dataset.schemaField = field.id;
+    input.addEventListener('input', () => onChange && onChange());
+    wrapper.appendChild(input);
+    container.appendChild(wrapper);
+  });
+}
+
+function removeDiacritics(value) {
+  return (value || '')
+    .toString()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function slugifySchemaId(value) {
+  const ascii = removeDiacritics(value).toLowerCase();
+  const slug = ascii
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return slug;
+}
+
+function ensureUniqueSchemaId(fields, baseId) {
+  const used = new Set((fields || []).map((field) => field.id));
+  const base = baseId || '';
+  if (base && !used.has(base)) return base;
+  const fallback = base || 'pole';
+  let counter = 2;
+  let id = `${fallback}-${counter}`;
+  while (used.has(id) && counter < 99) {
+    counter += 1;
+    id = `${fallback}-${counter}`;
+  }
+  return used.has(id) ? randomId('pole') : id;
+}
+
+function serviceSchemaFieldTypeOptions() {
+  return [
+    { value: 'text', label: 'Text' },
+    { value: 'textarea', label: 'Text (více řádků)' },
+    { value: 'number', label: 'Číslo' },
+    { value: 'checkbox', label: 'Zaškrtávací políčko (+cena)' },
+    { value: 'select', label: 'Výběr (1 možnost)' },
+    { value: 'multiselect', label: 'Výběr (více možností)' },
+    { value: 'heading', label: 'Nadpis / oddělovač' }
+  ];
+}
+
+function normalizeSchemaDraft(schema) {
+  if (!schema || !Array.isArray(schema.fields)) return { version: 1, fields: [] };
+  return {
+    version: 1,
+    fields: schema.fields.map((field) => ({
+      id: (field.id || '').toString().trim(),
+      type: SERVICE_FIELD_TYPES.has(field.type) ? field.type : 'text',
+      label: (field.label || '').toString().trim(),
+      required: field.required === true || field.required === 1 || field.required === '1',
+      price_delta: Number(field.price_delta) || 0,
+      options: Array.isArray(field.options) ? field.options.map((opt) => ({
+        id: (opt.id || '').toString().trim(),
+        label: (opt.label || '').toString().trim(),
+        price_delta: Number(opt.price_delta) || 0
+      })) : []
+    }))
+  };
+}
+
+function renderSchemaBuilder(container, schemaDraft, onChange) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  const fields = schemaDraft?.fields || [];
+  if (!fields.length) {
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = 'Zatím nejsou přidaná žádná vlastní pole.';
+    container.appendChild(hint);
+    return;
+  }
+
+  fields.forEach((field, index) => {
+    const card = document.createElement('div');
+    card.className = 'schema-field-card';
+
+    const rowTop = document.createElement('div');
+    rowTop.className = 'field-row';
+
+    const labelWrap = document.createElement('div');
+    labelWrap.className = 'field';
+    const labelLabel = document.createElement('label');
+    labelLabel.textContent = 'Popis';
+    const labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.value = field.label || '';
+    labelInput.addEventListener('input', () => {
+      field.label = labelInput.value;
+      if (!field.id) {
+        field.id = ensureUniqueSchemaId(fields, slugifySchemaId(field.label));
+      }
+      onChange && onChange();
+    });
+    labelWrap.appendChild(labelLabel);
+    labelWrap.appendChild(labelInput);
+
+    const typeWrap = document.createElement('div');
+    typeWrap.className = 'field';
+    const typeLabel = document.createElement('label');
+    typeLabel.textContent = 'Typ';
+    const typeSelect = document.createElement('select');
+    serviceSchemaFieldTypeOptions().forEach((opt) => {
+      const option = document.createElement('option');
+      option.value = opt.value;
+      option.textContent = opt.label;
+      typeSelect.appendChild(option);
+    });
+    typeSelect.value = field.type || 'text';
+    typeSelect.addEventListener('change', () => {
+      field.type = typeSelect.value;
+      if (field.type !== 'checkbox') {
+        field.price_delta = 0;
+      }
+      if (field.type === 'select' || field.type === 'multiselect') {
+        if (!Array.isArray(field.options) || !field.options.length) {
+          field.options = [
+            { id: 'a', label: 'Možnost A', price_delta: 0 },
+            { id: 'b', label: 'Možnost B', price_delta: 0 }
+          ];
+        }
+      } else {
+        field.options = [];
+      }
+      onChange && onChange(true);
+    });
+    typeWrap.appendChild(typeLabel);
+    typeWrap.appendChild(typeSelect);
+
+    rowTop.appendChild(labelWrap);
+    rowTop.appendChild(typeWrap);
+
+    const rowMeta = document.createElement('div');
+    rowMeta.className = 'field-row';
+
+    const reqWrap = document.createElement('div');
+    reqWrap.className = 'field';
+    const reqLabel = document.createElement('label');
+    reqLabel.textContent = 'Povinné';
+    const reqSelect = document.createElement('select');
+    reqSelect.innerHTML = '<option value="0">Ne</option><option value="1">Ano</option>';
+    reqSelect.value = field.required ? '1' : '0';
+    reqSelect.addEventListener('change', () => {
+      field.required = reqSelect.value === '1';
+      onChange && onChange();
+    });
+    reqWrap.appendChild(reqLabel);
+    reqWrap.appendChild(reqSelect);
+
+    const priceWrap = document.createElement('div');
+    priceWrap.className = 'field';
+    const priceLabel = document.createElement('label');
+    priceLabel.textContent = 'Příplatek (Kč)';
+    const priceInput = document.createElement('input');
+    priceInput.type = 'number';
+    priceInput.step = '1';
+    priceInput.min = '0';
+    priceInput.value = String(field.price_delta || 0);
+    priceInput.disabled = field.type !== 'checkbox';
+    priceInput.addEventListener('input', () => {
+      field.price_delta = priceInput.value === '' ? 0 : Number(priceInput.value) || 0;
+      onChange && onChange();
+    });
+    priceWrap.appendChild(priceLabel);
+    priceWrap.appendChild(priceInput);
+
+    rowMeta.appendChild(reqWrap);
+    rowMeta.appendChild(priceWrap);
+
+    card.appendChild(rowTop);
+    card.appendChild(rowMeta);
+
+    if (field.type === 'select' || field.type === 'multiselect') {
+      const optionsWrap = document.createElement('div');
+      optionsWrap.className = 'schema-options';
+
+      const optionTitle = document.createElement('div');
+      optionTitle.className = 'custom-title';
+      optionTitle.textContent = 'Možnosti (s příplatkem)';
+      optionsWrap.appendChild(optionTitle);
+
+      const options = Array.isArray(field.options) ? field.options : [];
+      options.forEach((opt) => {
+        const row = document.createElement('div');
+        row.className = 'schema-option-row';
+
+        const optLabelWrap = document.createElement('div');
+        optLabelWrap.className = 'field';
+        const optLabel = document.createElement('label');
+        optLabel.textContent = 'Název';
+        const optInput = document.createElement('input');
+        optInput.type = 'text';
+        optInput.value = opt.label || '';
+        optInput.addEventListener('input', () => {
+          opt.label = optInput.value;
+          if (!opt.id) {
+            opt.id = slugifySchemaId(opt.label) || randomId('opt');
+          }
+          onChange && onChange();
+        });
+        optLabelWrap.appendChild(optLabel);
+        optLabelWrap.appendChild(optInput);
+
+        const optPriceWrap = document.createElement('div');
+        optPriceWrap.className = 'field';
+        const optPriceLabel = document.createElement('label');
+        optPriceLabel.textContent = 'Příplatek (Kč)';
+        const optPriceInput = document.createElement('input');
+        optPriceInput.type = 'number';
+        optPriceInput.step = '1';
+        optPriceInput.value = String(opt.price_delta || 0);
+        optPriceInput.addEventListener('input', () => {
+          opt.price_delta = optPriceInput.value === '' ? 0 : Number(optPriceInput.value) || 0;
+          onChange && onChange();
+        });
+        optPriceWrap.appendChild(optPriceLabel);
+        optPriceWrap.appendChild(optPriceInput);
+
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'ghost';
+        delBtn.textContent = 'Smazat';
+        delBtn.addEventListener('click', () => {
+          field.options = (field.options || []).filter((item) => item !== opt);
+          onChange && onChange(true);
+        });
+
+        row.appendChild(optLabelWrap);
+        row.appendChild(optPriceWrap);
+        row.appendChild(delBtn);
+        optionsWrap.appendChild(row);
+      });
+
+      const addOptionBtn = document.createElement('button');
+      addOptionBtn.type = 'button';
+      addOptionBtn.className = 'ghost';
+      addOptionBtn.textContent = 'Přidat možnost';
+      addOptionBtn.addEventListener('click', () => {
+        const nextLabel = `Možnost ${String.fromCharCode(65 + (field.options || []).length)}`;
+        const nextId = ensureUniqueSchemaId(field.options || [], slugifySchemaId(nextLabel) || 'opt');
+        field.options = [...(field.options || []), { id: nextId, label: nextLabel, price_delta: 0 }];
+        onChange && onChange(true);
+      });
+      optionsWrap.appendChild(addOptionBtn);
+
+      card.appendChild(optionsWrap);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'schema-field-actions';
+
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'ghost';
+    upBtn.textContent = 'Nahoru';
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener('click', () => {
+      if (index <= 0) return;
+      const copy = [...fields];
+      const temp = copy[index - 1];
+      copy[index - 1] = copy[index];
+      copy[index] = temp;
+      schemaDraft.fields = copy;
+      onChange && onChange(true);
+    });
+
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'ghost';
+    downBtn.textContent = 'Dolů';
+    downBtn.disabled = index === fields.length - 1;
+    downBtn.addEventListener('click', () => {
+      if (index >= fields.length - 1) return;
+      const copy = [...fields];
+      const temp = copy[index + 1];
+      copy[index + 1] = copy[index];
+      copy[index] = temp;
+      schemaDraft.fields = copy;
+      onChange && onChange(true);
+    });
+
+    const delFieldBtn = document.createElement('button');
+    delFieldBtn.type = 'button';
+    delFieldBtn.className = 'ghost';
+    delFieldBtn.textContent = 'Smazat pole';
+    delFieldBtn.addEventListener('click', () => {
+      schemaDraft.fields = fields.filter((item) => item !== field);
+      onChange && onChange(true);
+    });
+
+    actions.appendChild(upBtn);
+    actions.appendChild(downBtn);
+    actions.appendChild(delFieldBtn);
+    card.appendChild(actions);
+
+    container.appendChild(card);
+  });
 }
 
 function escapeHtml(value) {
@@ -695,9 +1237,10 @@ function selectService(id) {
   state.selectedServiceId = id;
   const service = state.settings.services.find((item) => item.id === id);
   if (!service) return;
-  if (previous !== id) {
-    resetVisitFields();
-  }
+  const schemaJson = (service.form_schema_json || '').toString();
+  const schemaChanged = schemaJson !== (state.selectedServiceSchemaJson || '');
+  state.selectedServiceSchemaJson = schemaJson;
+  state.selectedServiceSchema = parseServiceSchemaJson(schemaJson);
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
     button.classList.toggle('active', button.dataset.id === id);
@@ -706,9 +1249,20 @@ function selectService(id) {
   if (service.form_type === 'cosmetic') {
     dom.serviceFormCosmetic.classList.remove('hidden');
     dom.serviceFormGeneric.classList.add('hidden');
+    if (dom.genericLegacyFields) dom.genericLegacyFields.classList.remove('hidden');
   } else {
     dom.serviceFormCosmetic.classList.add('hidden');
     dom.serviceFormGeneric.classList.remove('hidden');
+    const hasSchemaFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
+    if (dom.genericLegacyFields) {
+      dom.genericLegacyFields.classList.toggle('hidden', hasSchemaFields);
+    }
+  }
+
+  if (previous !== id || schemaChanged) {
+    resetVisitFields();
+  } else {
+    updateActivePricePreview();
   }
 }
 
@@ -791,6 +1345,10 @@ function resetVisitFields() {
   dom.addonsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
     input.checked = false;
   });
+  if (dom.cosmeticSchemaFields) {
+    dom.cosmeticSchemaFields.innerHTML = '';
+  }
+  dom.schemaExtras.value = '';
   dom.genText1.value = '';
   dom.genText2.value = '';
   dom.genText3.value = '';
@@ -802,7 +1360,13 @@ function resetVisitFields() {
   dom.genWorker.value = getDefaultWorkerId();
   dom.genPaymentMethod.value = 'cash';
   dom.genNote.value = '';
-  updatePricePreview();
+  if (dom.genericSchemaFields) {
+    dom.genericSchemaFields.innerHTML = '';
+  }
+  dom.genSchemaExtras.value = '';
+  dom.genFinalTotal.value = '';
+  renderActiveSchemaFields();
+  updateActivePricePreview();
 }
 
 function clearSelection() {
@@ -931,11 +1495,58 @@ function updatePricePreview() {
     .reduce((sum, input) => sum + Number(input.dataset.price || 0), 0);
 
   const manual = dom.manualTotal.value !== '' ? Number(dom.manualTotal.value) : null;
-  const finalPrice = manual !== null && !Number.isNaN(manual) ? manual : basePrice + addonsTotal;
+  const base = manual !== null && !Number.isNaN(manual) ? manual : basePrice + addonsTotal;
+
+  const schemaValues = collectSchemaValues(dom.cosmeticSchemaFields, state.selectedServiceSchema);
+  const schemaExtras = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
+  const finalPrice = base + schemaExtras;
 
   dom.basePrice.value = formatCzk(basePrice);
   dom.addonsTotal.value = formatCzk(addonsTotal);
+  dom.schemaExtras.value = formatCzk(schemaExtras);
   dom.finalTotal.value = formatCzk(finalPrice);
+}
+
+function updateGenericPricePreview() {
+  const raw = dom.genPrice.value !== '' ? Number(dom.genPrice.value) : 0;
+  const base = Number.isFinite(raw) ? raw : 0;
+  const schemaValues = collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema);
+  const schemaExtras = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
+  dom.genSchemaExtras.value = formatCzk(schemaExtras);
+  dom.genFinalTotal.value = formatCzk(base + schemaExtras);
+}
+
+function selectedService() {
+  return state.settings.services.find((item) => item.id === state.selectedServiceId) || null;
+}
+
+function renderActiveSchemaFields() {
+  const service = selectedService();
+  const schema = state.selectedServiceSchema;
+  if (!service) return;
+
+  if (service.form_type === 'cosmetic') {
+    renderSchemaFields(dom.cosmeticSchemaFields, schema, updatePricePreview);
+    if (dom.genericSchemaFields) dom.genericSchemaFields.innerHTML = '';
+    if (dom.genericLegacyFields) dom.genericLegacyFields.classList.remove('hidden');
+  } else {
+    renderSchemaFields(dom.genericSchemaFields, schema, updateGenericPricePreview);
+    if (dom.cosmeticSchemaFields) dom.cosmeticSchemaFields.innerHTML = '';
+    const hasSchemaFields = !!(schema && Array.isArray(schema.fields) && schema.fields.length);
+    if (dom.genericLegacyFields) {
+      dom.genericLegacyFields.classList.toggle('hidden', hasSchemaFields);
+    }
+  }
+}
+
+function updateActivePricePreview() {
+  const service = selectedService();
+  if (!service) return;
+  if (service.form_type === 'cosmetic') {
+    updatePricePreview();
+  } else {
+    updateGenericPricePreview();
+  }
 }
 
 async function addVisit() {
@@ -968,6 +1579,9 @@ async function addVisit() {
     .filter((input) => input.checked)
     .map((input) => input.value);
 
+  const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
+  const schemaData = schemaHasFields ? collectSchemaValues(dom.cosmeticSchemaFields, state.selectedServiceSchema) : null;
+
   await api.post(`/api/clients/${clientId}/visits`, {
     date: dom.visitDate.value || todayLocal(),
     service_id: state.selectedServiceId,
@@ -976,7 +1590,8 @@ async function addVisit() {
     manual_total: dom.manualTotal.value,
     note: dom.visitNote.value.trim(),
     worker_id: dom.worker.value,
-    payment_method: dom.paymentMethod.value
+    payment_method: dom.paymentMethod.value,
+    ...(schemaData ? { service_data: schemaData } : {})
   });
 
   resetVisitFields();
@@ -1018,6 +1633,9 @@ async function addGenericVisit() {
     select3: dom.genSelect3.value
   };
 
+  const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
+  const schemaData = schemaHasFields ? collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema) : null;
+
   await api.post(`/api/clients/${clientId}/visits`, {
     date: dom.genDate.value || todayLocal(),
     service_id: state.selectedServiceId,
@@ -1025,7 +1643,7 @@ async function addGenericVisit() {
     note: dom.genNote.value.trim(),
     worker_id: dom.genWorker.value,
     payment_method: dom.genPaymentMethod.value,
-    service_data: serviceData
+    service_data: schemaData || serviceData
   });
 
   resetVisitFields();
@@ -1932,6 +2550,8 @@ async function openServiceDetailModal(serviceId) {
   const service = state.settings.services.find((item) => item.id === serviceId);
   if (!service) return;
 
+  let schemaDraft = normalizeSchemaDraft(parseServiceSchemaJson(service.form_schema_json));
+
   openModal(`
     <div class="modal-header">
       <div>
@@ -1973,6 +2593,16 @@ async function openServiceDetailModal(serviceId) {
         <div class="actions-row">
           <button class="primary" id="serviceSave">Uložit službu</button>
         </div>
+      </div>
+      <div class="settings-section">
+        <div class="panel-header">
+          <div>
+            <h3>Karta služby</h3>
+            <div class="meta">Vlastní pole k této službě. Příplatky se přičtou k ceně.</div>
+          </div>
+          <button type="button" class="ghost" id="schemaAddField">Nové pole</button>
+        </div>
+        <div id="schemaBuilder" class="schema-builder"></div>
       </div>
       ${settingsSectionTemplate({
         title: 'Typy pleti',
@@ -2019,6 +2649,24 @@ async function openServiceDetailModal(serviceId) {
   formSelect.value = service.form_type || 'generic';
   durationSelect.value = String(service.duration_minutes || 30);
 
+  const schemaBuilder = document.getElementById('schemaBuilder');
+  const refreshSchemaBuilder = (force = false) => {
+    if (!force) return;
+    renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+  };
+  renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+
+  document.getElementById('schemaAddField').addEventListener('click', () => {
+    const nextLabel = `Pole ${schemaDraft.fields.length + 1}`;
+    const baseId = slugifySchemaId(nextLabel) || `pole-${schemaDraft.fields.length + 1}`;
+    const id = ensureUniqueSchemaId(schemaDraft.fields, baseId);
+    schemaDraft.fields = [
+      ...schemaDraft.fields,
+      { id, type: 'text', label: nextLabel, required: false, price_delta: 0, options: [] }
+    ];
+    renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+  });
+
   document.getElementById('serviceSave').addEventListener('click', async () => {
     const payload = {
       name: nameInput.value.trim(),
@@ -2029,6 +2677,45 @@ async function openServiceDetailModal(serviceId) {
       alert('Vyplň název služby.');
       return;
     }
+
+    const schemaFields = Array.isArray(schemaDraft.fields) ? schemaDraft.fields : [];
+    if (schemaFields.length) {
+      for (const field of schemaFields) {
+        field.label = (field.label || '').toString().trim();
+        if (!field.label) {
+          alert('Vyplň popis u každého pole v kartě služby.');
+          return;
+        }
+        if (!field.id) {
+          field.id = ensureUniqueSchemaId(schemaDraft.fields, slugifySchemaId(field.label));
+        }
+        if (field.type === 'select' || field.type === 'multiselect') {
+          const options = Array.isArray(field.options) ? field.options : [];
+          const filtered = options.filter((opt) => (opt.label || '').toString().trim());
+          if (!filtered.length) {
+            alert(`Pole "${field.label}" musí mít alespoň jednu možnost.`);
+            return;
+          }
+          const used = new Set();
+          filtered.forEach((opt) => {
+            opt.label = (opt.label || '').toString().trim();
+            if (!opt.id) opt.id = slugifySchemaId(opt.label) || randomId('opt');
+            if (used.has(opt.id)) opt.id = randomId('opt');
+            used.add(opt.id);
+            opt.price_delta = Number(opt.price_delta) || 0;
+          });
+          field.options = filtered;
+        } else {
+          field.options = [];
+        }
+        field.required = field.required === true;
+        field.price_delta = field.type === 'checkbox' ? Number(field.price_delta) || 0 : 0;
+      }
+      payload.form_schema = schemaDraft;
+    } else {
+      payload.form_schema = null;
+    }
+
     await api.put(`/api/services/${service.id}`, payload);
     await loadSettings();
     closeModal();
@@ -2498,6 +3185,7 @@ function wireEvents() {
   dom.btnLogout.addEventListener('click', handleLogout);
   dom.treatmentType.addEventListener('change', updatePricePreview);
   dom.manualTotal.addEventListener('input', updatePricePreview);
+  dom.genPrice.addEventListener('input', updateGenericPricePreview);
 }
 
 async function init() {

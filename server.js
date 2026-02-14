@@ -206,6 +206,141 @@ function normalizeHost(rawHost) {
   return host.split(':')[0];
 }
 
+const SERVICE_SCHEMA_VERSION = 1;
+const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
+const MAX_SERVICE_SCHEMA_FIELDS = 40;
+const MAX_SERVICE_SCHEMA_OPTIONS = 80;
+
+function normalizeServiceSchema(rawSchema) {
+  if (rawSchema === null) return null;
+  if (!rawSchema || typeof rawSchema !== 'object') return null;
+
+  const rawFields = Array.isArray(rawSchema.fields) ? rawSchema.fields : [];
+  const fields = [];
+
+  for (const rawField of rawFields.slice(0, MAX_SERVICE_SCHEMA_FIELDS)) {
+    if (!rawField || typeof rawField !== 'object') continue;
+    const id = (rawField.id || '').toString().trim();
+    const type = (rawField.type || '').toString().trim();
+    const label = (rawField.label || '').toString().trim();
+    if (!id || !label || !SERVICE_FIELD_TYPES.has(type)) continue;
+
+    const required = rawField.required === true || rawField.required === 1 || rawField.required === '1';
+    const field = { id, type, label, required };
+
+    if (type === 'checkbox') {
+      field.price_delta = toInt(rawField.price_delta, 0);
+    }
+
+    if (type === 'select' || type === 'multiselect') {
+      const rawOptions = Array.isArray(rawField.options) ? rawField.options : [];
+      const options = [];
+      for (const rawOption of rawOptions.slice(0, MAX_SERVICE_SCHEMA_OPTIONS)) {
+        if (!rawOption || typeof rawOption !== 'object') continue;
+        const optionId = (rawOption.id || '').toString().trim();
+        const optionLabel = (rawOption.label || '').toString().trim();
+        if (!optionId || !optionLabel) continue;
+        options.push({ id: optionId, label: optionLabel, price_delta: toInt(rawOption.price_delta, 0) });
+      }
+      field.options = options;
+    }
+
+    fields.push(field);
+  }
+
+  return { version: SERVICE_SCHEMA_VERSION, fields };
+}
+
+function parseServiceSchemaJson(schemaJson) {
+  const raw = (schemaJson || '').toString().trim();
+  if (!raw) return null;
+  try {
+    return normalizeServiceSchema(JSON.parse(raw));
+  } catch (err) {
+    return null;
+  }
+}
+
+function truthyValue(value) {
+  if (value === true) return true;
+  if (value === 1) return true;
+  if (value === '1') return true;
+  const normalized = (value || '').toString().trim().toLowerCase();
+  return normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function sanitizeServiceDataBySchema(schema, rawData) {
+  const result = { data: null, extras_total: 0 };
+  if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return result;
+
+  const input = rawData && typeof rawData === 'object' ? rawData : {};
+  const data = {};
+  let extrasTotal = 0;
+
+  for (const field of schema.fields) {
+    const rawValue = input[field.id];
+
+    if (field.type === 'heading') continue;
+
+    if (field.type === 'text' || field.type === 'textarea') {
+      const value = (rawValue || '').toString().trim();
+      if (value) {
+        data[field.id] = value.slice(0, 2000);
+      }
+      continue;
+    }
+
+    if (field.type === 'number') {
+      const n = Number(rawValue);
+      if (Number.isFinite(n)) {
+        data[field.id] = n;
+      }
+      continue;
+    }
+
+    if (field.type === 'checkbox') {
+      const checked = truthyValue(rawValue);
+      data[field.id] = checked;
+      if (checked) {
+        extrasTotal += toInt(field.price_delta, 0);
+      }
+      continue;
+    }
+
+    if (field.type === 'select') {
+      const selected = (rawValue || '').toString().trim();
+      const option = (field.options || []).find((item) => item.id === selected);
+      if (option) {
+        data[field.id] = option.id;
+        extrasTotal += toInt(option.price_delta, 0);
+      }
+      continue;
+    }
+
+    if (field.type === 'multiselect') {
+      const values = Array.isArray(rawValue) ? rawValue : rawValue ? [rawValue] : [];
+      const selectedIds = values.map((item) => (item || '').toString().trim()).filter(Boolean);
+      const allowed = new Set((field.options || []).map((opt) => opt.id));
+      const filtered = Array.from(new Set(selectedIds.filter((id) => allowed.has(id))));
+      if (filtered.length) {
+        data[field.id] = filtered;
+        const optionMap = new Map((field.options || []).map((opt) => [opt.id, opt]));
+        for (const id of filtered) {
+          const opt = optionMap.get(id);
+          if (opt) extrasTotal += toInt(opt.price_delta, 0);
+        }
+      } else {
+        data[field.id] = [];
+      }
+      continue;
+    }
+  }
+
+  result.data = data;
+  result.extras_total = extrasTotal;
+  return result;
+}
+
 async function findTenantBySlug(slug) {
   const normalized = normalizeSlug(slug);
   if (!normalized) return null;
@@ -447,6 +582,7 @@ async function initDb() {
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
       duration_minutes INTEGER NOT NULL DEFAULT 30,
+      form_schema_json TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
     );
@@ -616,6 +752,7 @@ async function initDb() {
   await ensureColumn('expenses', 'worker_id', 'TEXT');
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('services', 'form_schema_json', 'TEXT');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('tenants', 'domain', 'TEXT');
   await ensureColumn('tenants', 'logo_data', 'TEXT');
@@ -1498,15 +1635,38 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 30);
+  const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (duration < 30 || duration % 30 !== 0) {
     return res.status(400).json({ error: 'duration must be in 30 minute steps' });
   }
 
+  let schemaJson = null;
+  if (schemaProvided) {
+    if (payload.form_schema === null) {
+      schemaJson = null;
+    } else {
+      let rawSchema = payload.form_schema;
+      if (typeof rawSchema === 'string') {
+        try {
+          rawSchema = JSON.parse(rawSchema);
+        } catch (err) {
+          rawSchema = null;
+        }
+      }
+      const schema = normalizeServiceSchema(rawSchema);
+      if (!schema) return res.status(400).json({ error: 'form_schema is invalid' });
+      schemaJson = JSON.stringify(schema);
+      if (schemaJson.length > 200_000) {
+        return res.status(400).json({ error: 'form_schema je příliš velké.' });
+      }
+    }
+  }
+
   const id = newId();
   await db.run(
-    'INSERT INTO services (id, tenant_id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [id, req.tenant.id, name, formType, duration, nowIso()]
+    'INSERT INTO services (id, tenant_id, name, form_type, duration_minutes, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [id, req.tenant.id, name, formType, duration, schemaJson, nowIso()]
   );
   res.json({ id });
 });
@@ -1516,18 +1676,44 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const name = (payload.name || '').trim();
   const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 30);
+  const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (duration < 30 || duration % 30 !== 0) {
     return res.status(400).json({ error: 'duration must be in 30 minute steps' });
   }
 
-  await db.run('UPDATE services SET name = ?, form_type = ?, duration_minutes = ? WHERE id = ? AND tenant_id = ?', [
-    name,
-    formType,
-    duration,
-    req.params.id,
-    req.tenant.id
-  ]);
+  const existing = await db.get(
+    'SELECT id, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
+    [req.params.id, req.tenant.id]
+  );
+  if (!existing) return res.status(404).json({ error: 'Služba nenalezena.' });
+
+  let schemaJson = existing.form_schema_json;
+  if (schemaProvided) {
+    if (payload.form_schema === null) {
+      schemaJson = null;
+    } else {
+      let rawSchema = payload.form_schema;
+      if (typeof rawSchema === 'string') {
+        try {
+          rawSchema = JSON.parse(rawSchema);
+        } catch (err) {
+          rawSchema = null;
+        }
+      }
+      const schema = normalizeServiceSchema(rawSchema);
+      if (!schema) return res.status(400).json({ error: 'form_schema is invalid' });
+      schemaJson = JSON.stringify(schema);
+      if (schemaJson.length > 200_000) {
+        return res.status(400).json({ error: 'form_schema je příliš velké.' });
+      }
+    }
+  }
+
+  await db.run(
+    'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
+    [name, formType, duration, schemaJson, req.params.id, req.tenant.id]
+  );
   res.json({ ok: true });
 });
 
@@ -2116,7 +2302,7 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const service = payload.service_id
-    ? await db.get('SELECT id, name, form_type FROM services WHERE id = ? AND tenant_id = ? AND active = 1', [payload.service_id, req.tenant.id])
+    ? await db.get('SELECT id, name, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1', [payload.service_id, req.tenant.id])
     : null;
   if (!service) return res.status(400).json({ error: 'Service is required' });
 
@@ -2135,6 +2321,9 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   let addonsTotal = 0;
   let treatmentPrice = 0;
   let total = 0;
+  const schema = parseServiceSchemaJson(service.form_schema_json);
+  const schemaResult = sanitizeServiceDataBySchema(schema, payload.service_data);
+  const schemaExtrasTotal = toInt(schemaResult.extras_total, 0);
 
   if (service.form_type === 'cosmetic') {
     treatment = payload.treatment_id
@@ -2151,16 +2340,22 @@ app.post('/api/clients/:id/visits', async (req, res) => {
 
     addonsTotal = addonRows.reduce((sum, item) => sum + toInt(item.price, 0), 0);
     treatmentPrice = treatment ? toInt(treatment.price, 0) : 0;
-    total = manualTotal !== null ? manualTotal : treatmentPrice + addonsTotal;
+    const base = manualTotal !== null ? manualTotal : treatmentPrice + addonsTotal;
+    total = base + schemaExtrasTotal;
   } else {
     if (manualTotal === null) {
       return res.status(400).json({ error: 'manual_total is required' });
     }
-    total = manualTotal;
+    total = manualTotal + schemaExtrasTotal;
   }
 
   const id = newId();
-  const serviceData = payload.service_data ? JSON.stringify(payload.service_data) : null;
+  let serviceData = null;
+  if (schemaResult.data !== null) {
+    serviceData = JSON.stringify(schemaResult.data);
+  } else if (payload.service_data) {
+    serviceData = JSON.stringify(payload.service_data);
+  }
   await db.run(
     `INSERT INTO visits (
       id, tenant_id, client_id, date, service_id, treatment_id, treatment_price,

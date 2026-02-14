@@ -500,6 +500,91 @@ button.primary:hover {
   margin-right: 8px;
 }
 
+.custom-fields {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  display: grid;
+  gap: 10px;
+}
+
+.custom-fields:empty {
+  display: none;
+}
+
+.custom-fields .custom-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.custom-field {
+  display: grid;
+  gap: 6px;
+}
+
+.custom-field-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.custom-field-inline label {
+  margin: 0;
+  font-size: 14px;
+  color: #111;
+}
+
+.custom-field-help {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.schema-builder {
+  display: grid;
+  gap: 12px;
+}
+
+.schema-field-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+  display: grid;
+  gap: 10px;
+}
+
+.schema-field-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.schema-field-actions button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.schema-options {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.schema-option-row {
+  display: grid;
+  grid-template-columns: 1fr 140px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.schema-option-row .ghost {
+  height: 40px;
+}
+
 .actions-row {
   display: flex;
   gap: 8px;
