@@ -788,6 +788,72 @@ button.primary:hover {
   margin-bottom: 12px;
 }
 
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-tab {
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+
+.settings-tab.active {
+  border-color: rgba(20, 83, 255, 0.35);
+  background: rgba(20, 83, 255, 0.1);
+  color: #1453ff;
+}
+
+.settings-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.settings-subtab {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-subtab.active {
+  border-color: rgba(244, 114, 43, 0.45);
+  background: rgba(244, 114, 43, 0.12);
+  color: #a53c08;
+}
+
+.schema-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 10px;
+  align-items: start;
+}
+
+.schema-preview {
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: #fdfbf8;
+}
+
+.schema-split-actions {
+  justify-content: flex-start;
+}
+
 .calendar {
   display: grid;
   gap: 10px;
@@ -1025,6 +1091,12 @@ button.primary:hover {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
+}
+
+@media (max-width: 860px) {
+  .schema-split {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-list {

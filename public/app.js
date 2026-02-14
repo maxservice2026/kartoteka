@@ -50,6 +50,10 @@ const dom = {
 
 const state = {
   tenant: null,
+  ui: {
+    settingsTab: 'services',
+    clonesTab: 'clones'
+  },
   clients: [],
   selectedClientId: null,
   settings: {
@@ -2415,18 +2419,41 @@ async function openServiceDetailModal(serviceId) {
         <div class="panel-header">
           <div>
             <h3>Karta služby</h3>
-            <div class="meta">Vlastní pole k této službě. Cena z karty se použije jako návrh (předvyplní „Celkem“).</div>
+            <div class="meta">Sestav vlastní formulář. Vpravo vidíš náhled, jak to uvidí uživatel v kartě klientky.</div>
           </div>
-          <button type="button" class="ghost" id="schemaAddField">Nové pole</button>
         </div>
-        <div id="schemaBuilder" class="schema-builder"></div>
+        <div class="schema-split">
+          <div>
+            <div class="actions-row schema-split-actions">
+              <button type="button" class="ghost" id="schemaAddField">Nové pole</button>
+            </div>
+            <div id="schemaBuilder" class="schema-builder"></div>
+          </div>
+          <div class="schema-preview">
+            <div class="meta">Náhled karty (jen pro zobrazení).</div>
+            <div id="schemaPreviewFields" class="custom-fields"></div>
+            <div class="field-row">
+              <div class="field">
+                <label>Cena z karty (automaticky)</label>
+                <input type="text" value="0 Kč" readonly disabled />
+              </div>
+              <div class="field">
+                <label>Celkem (ručně)</label>
+                <input type="text" placeholder="Finální cena" readonly disabled />
+              </div>
+            </div>
+            <div class="actions-row">
+              <button type="button" class="primary" disabled>Uložit službu</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `);
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
   document.getElementById('backToSettings').addEventListener('click', () => {
-    openSettingsModal().catch(() => {});
+    openSettingsModal('services').catch(() => {});
   });
 
   const nameInput = document.getElementById('serviceEditName');
@@ -2435,11 +2462,24 @@ async function openServiceDetailModal(serviceId) {
   durationSelect.value = String(service.duration_minutes || 30);
 
   const schemaBuilder = document.getElementById('schemaBuilder');
-  const refreshSchemaBuilder = (force = false) => {
-    if (!force) return;
-    renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+  const schemaPreview = document.getElementById('schemaPreviewFields');
+  const renderSchemaPreview = () => {
+    if (!schemaPreview) return;
+    renderSchemaFields(schemaPreview, schemaDraft, null);
+    schemaPreview.querySelectorAll('input, textarea, select').forEach((el) => {
+      el.disabled = true;
+    });
   };
-  renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+
+  const onSchemaDraftChange = (force = false) => {
+    if (force) {
+      renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
+    }
+    renderSchemaPreview();
+  };
+
+  renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
+  renderSchemaPreview();
 
   document.getElementById('schemaAddField').addEventListener('click', () => {
     const nextLabel = `Pole ${schemaDraft.fields.length + 1}`;
@@ -2449,7 +2489,7 @@ async function openServiceDetailModal(serviceId) {
       ...schemaDraft.fields,
       { id, type: 'text', label: nextLabel, required: false, price_delta: 0, options: [] }
     ];
-    renderSchemaBuilder(schemaBuilder, schemaDraft, refreshSchemaBuilder);
+    onSchemaDraftChange(true);
   });
 
   document.getElementById('serviceSave').addEventListener('click', async () => {
@@ -2506,66 +2546,60 @@ async function openServiceDetailModal(serviceId) {
   });
 }
 
-async function openSettingsModal() {
-  if (state.auth.user?.role === 'admin') {
-    await loadUsers();
-    if (state.auth.user?.is_superadmin) {
-      await loadClones();
-      await loadFeatureMatrix();
-    }
-  }
+function canManageClonesSettings() {
+  return state.auth.user?.role === 'admin' && state.auth.user?.is_superadmin && state.tenant?.slug === 'default';
+}
 
-  openModal(`
-    <div class="modal-header">
-      <div>
-        <h2>Nastavení</h2>
-        <div class="meta">Správa služeb a uživatelů.</div>
-      </div>
-      <button class="ghost" id="closeModal">Zavřít</button>
+function getSettingsTabs() {
+  if (state.auth.user?.role !== 'admin') return [];
+  const tabs = [
+    { key: 'logo', label: 'Logo' },
+    { key: 'services', label: 'Služby' },
+    { key: 'users', label: 'Uživatelé' }
+  ];
+  if (canManageClonesSettings()) {
+    tabs.push({ key: 'clones', label: 'Klony' });
+  }
+  return tabs;
+}
+
+function settingsTabsTemplate(tabs, activeKey) {
+  return `
+    <nav class="settings-tabs" id="settingsTabs" aria-label="Podstránky nastavení">
+      ${tabs
+        .map(
+          (tab) => `
+            <button type="button" class="settings-tab${tab.key === activeKey ? ' active' : ''}" data-tab="${tab.key}">
+              ${tab.label}
+            </button>
+          `
+        )
+        .join('')}
+    </nav>
+  `;
+}
+
+function setActiveSettingsTab(tabKey) {
+  document.querySelectorAll('#settingsTabs [data-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.tab === tabKey);
+  });
+}
+
+function clonesSubtabsTemplate(activeKey) {
+  return `
+    <div class="settings-subtabs" aria-label="Podmenu klonů">
+      <button type="button" class="settings-subtab${activeKey === 'clones' ? ' active' : ''}" data-clones-tab="clones">Klony</button>
+      <button type="button" class="settings-subtab${activeKey === 'matrix' ? ' active' : ''}" data-clones-tab="matrix">Feature Matrix</button>
     </div>
-    <div class="modal-grid" id="settingsGrid"></div>
-  `);
+  `;
+}
 
-  document.getElementById('closeModal').addEventListener('click', closeModal);
-
-  const grid = document.getElementById('settingsGrid');
-  const sections = [];
-
-  if (state.auth.user?.role === 'admin') {
-    sections.push(brandingSectionTemplate());
-  }
-
-  sections.push(
-    settingsSectionTemplate({
-      title: 'Služby',
-      subtitle: 'Hlavní služby pro výběr v kartě klientky.',
-      formId: 'services',
-      listId: 'serviceList',
-      fields: [
-        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
-        '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
-      ]
-    })
-  );
-
-  if (state.auth.user?.role === 'admin') {
-    sections.push(
-      settingsSectionTemplate({
-        title: 'Uživatelé',
-        subtitle: 'Přihlašovací účty a role.',
-        formId: 'users',
-        listId: 'userList',
-        fields: [
-          '<div class="field"><label>Jméno</label><input type="text" data-field="full_name" /></div>',
-          '<div class="field"><label>Uživatelské jméno</label><input type="text" data-field="username" /></div>',
-          '<div class="field"><label>Role</label><select data-field="role"><option value="worker">Pracovník</option><option value="reception">Recepční</option><option value="admin">Administrátor</option></select></div>',
-          '<div class="field"><label>Heslo</label><input type="password" data-field="password" placeholder="Nové heslo" /></div>'
-        ]
-      })
-    );
-    if (state.auth.user?.is_superadmin) {
-      sections.push(
-        settingsSectionTemplate({
+function clonesSettingsPageTemplate() {
+  const activeTab = state.ui.clonesTab || 'clones';
+  const body =
+    activeTab === 'matrix'
+      ? featureMatrixSectionTemplate()
+      : settingsSectionTemplate({
           title: 'Klony (MVP)',
           subtitle: 'Správa klonů aplikace pro další subjekty.',
           formId: 'clones',
@@ -2581,27 +2615,109 @@ async function openSettingsModal() {
             '<div class="field"><label>Admin e-mail</label><input type="email" data-field="admin_email" placeholder="admin@domena.cz" /></div>',
             '<div class="field"><label>Poznámka</label><input type="text" data-field="note" placeholder="Interní poznámka" /></div>'
           ]
-        })
-      );
-      sections.push(featureMatrixSectionTemplate());
-    }
+        });
+
+  return `${clonesSubtabsTemplate(activeTab)}${body}`;
+}
+
+function renderSettingsTabContent(tabKey) {
+  const content = document.getElementById('settingsContent');
+  if (!content) return;
+
+  let html = '';
+
+  if (tabKey === 'logo') {
+    html = brandingSectionTemplate();
+  } else if (tabKey === 'services') {
+    html = settingsSectionTemplate({
+      title: 'Služby',
+      subtitle: 'Služby pro výběr v kartě klientky. V detailu služby si poskládáš vlastní kartu (formulář).',
+      formId: 'services',
+      listId: 'serviceList',
+      fields: [
+        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
+        '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
+      ]
+    });
+  } else if (tabKey === 'users') {
+    html = settingsSectionTemplate({
+      title: 'Uživatelé',
+      subtitle: 'Přihlašovací účty a role.',
+      formId: 'users',
+      listId: 'userList',
+      fields: [
+        '<div class="field"><label>Jméno</label><input type="text" data-field="full_name" /></div>',
+        '<div class="field"><label>Uživatelské jméno</label><input type="text" data-field="username" /></div>',
+        '<div class="field"><label>Role</label><select data-field="role"><option value="worker">Pracovník</option><option value="reception">Recepční</option><option value="admin">Administrátor</option></select></div>',
+        '<div class="field"><label>Heslo</label><input type="password" data-field="password" placeholder="Nové heslo" /></div>'
+      ]
+    });
+  } else if (tabKey === 'clones' && canManageClonesSettings()) {
+    html = clonesSettingsPageTemplate();
   }
 
-  grid.innerHTML = sections.join('');
+  content.innerHTML = `<div class="modal-grid">${html}</div>`;
 
   renderSettingsLists();
   wireSettingsForms();
   wireBrandSettings();
 
+  document.querySelectorAll('[data-clones-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.ui.clonesTab = button.dataset.clonesTab || 'clones';
+      renderSettingsTabContent('clones');
+    });
+  });
+
   const btnCloneUsers = document.getElementById('btnCloneUsers');
   if (btnCloneUsers) {
     btnCloneUsers.addEventListener('click', () => {
-      const usersSection = document.querySelector('[data-form="users"]');
-      if (usersSection) {
-        usersSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
+      switchSettingsTab('users');
     });
   }
+}
+
+function switchSettingsTab(tabKey) {
+  state.ui.settingsTab = tabKey;
+  setActiveSettingsTab(tabKey);
+  renderSettingsTabContent(tabKey);
+}
+
+async function openSettingsModal(initialTab = '') {
+  if (state.auth.user?.role === 'admin') {
+    await loadUsers();
+    if (canManageClonesSettings()) {
+      await loadClones();
+      await loadFeatureMatrix();
+    }
+  }
+
+  const tabs = getSettingsTabs();
+  const allowed = new Set(tabs.map((tab) => tab.key));
+  const desired = (initialTab || state.ui.settingsTab || 'services').toString();
+  const resolved = allowed.has(desired) ? desired : allowed.has('services') ? 'services' : tabs[0]?.key || 'services';
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>Nastavení</h2>
+        <div class="meta">Logo • služby • uživatelé${canManageClonesSettings() ? ' • klony' : ''}.</div>
+      </div>
+      <button class="ghost" id="closeModal">Zavřít</button>
+    </div>
+    ${settingsTabsTemplate(tabs, resolved)}
+    <div id="settingsContent"></div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+
+  document.querySelectorAll('#settingsTabs [data-tab]').forEach((button) => {
+    button.addEventListener('click', () => {
+      switchSettingsTab(button.dataset.tab);
+    });
+  });
+
+  switchSettingsTab(resolved);
 }
 
 function renderSettingsLists() {
