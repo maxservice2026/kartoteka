@@ -1164,23 +1164,70 @@ function renderServiceButtons(autoSelect = false) {
     return;
   }
 
-  if (state.selectedServiceId && !state.settings.services.find((item) => item.id === state.selectedServiceId)) {
+  const services = Array.isArray(state.settings.services) ? state.settings.services : [];
+  const parentIds = new Set(services.filter((s) => s.parent_id).map((s) => String(s.parent_id)));
+
+  if (
+    state.selectedServiceId &&
+    (!services.find((item) => item.id === state.selectedServiceId) || parentIds.has(String(state.selectedServiceId)))
+  ) {
     state.selectedServiceId = null;
   }
 
-  dom.servicePicker.innerHTML = state.settings.services
-    .map((service) => {
-      const active = service.id === state.selectedServiceId ? 'active' : '';
-      return `<button type="button" class="service-button ${active}" data-id="${service.id}">${service.name}</button>`;
-    })
-    .join('');
+  const collator = new Intl.Collator('cs', { sensitivity: 'base' });
+  const childrenByParent = new Map();
+  services.forEach((service) => {
+    const key = service.parent_id ? String(service.parent_id) : '';
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(service);
+  });
+  for (const list of childrenByParent.values()) {
+    list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
+  }
+
+  const renderTree = (parentKey, level) => {
+    const list = childrenByParent.get(parentKey) || [];
+    return list
+      .map((service) => {
+        const hasChildren = parentIds.has(String(service.id));
+        const indent = Math.max(0, level) * 16;
+        if (hasChildren) {
+          return `
+            <div class="service-group" style="margin-left:${indent}px">${escapeHtml(service.name)}</div>
+            <div class="service-group-children">
+              ${renderTree(String(service.id), level + 1)}
+            </div>
+          `;
+        }
+        const active = service.id === state.selectedServiceId ? 'active' : '';
+        return `<button type="button" class="service-button ${active}" data-id="${service.id}" style="margin-left:${indent}px">${escapeHtml(service.name)}</button>`;
+      })
+      .join('');
+  };
+
+  dom.servicePicker.innerHTML = renderTree('', 0);
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
     button.addEventListener('click', () => selectService(button.dataset.id));
   });
 
   if (autoSelect && !state.selectedServiceId) {
-    selectService(state.settings.services[0].id);
+    const findFirstLeaf = (parentKey) => {
+      const list = childrenByParent.get(parentKey) || [];
+      for (const service of list) {
+        if (parentIds.has(String(service.id))) {
+          const nested = findFirstLeaf(String(service.id));
+          if (nested) return nested;
+          continue;
+        }
+        return service;
+      }
+      return null;
+    };
+    const firstLeaf = findFirstLeaf('');
+    if (firstLeaf) {
+      selectService(firstLeaf.id);
+    }
   } else if (state.selectedServiceId) {
     selectService(state.selectedServiceId);
   } else {
@@ -2620,6 +2667,50 @@ function clonesSettingsPageTemplate() {
   return `${clonesSubtabsTemplate(activeTab)}${body}`;
 }
 
+function servicesSettingsPageTemplate() {
+  return `
+    <div class="settings-section" data-form="services">
+      <div class="panel-header">
+        <div>
+          <h3>Služby</h3>
+          <div class="meta">Služby pro výběr v kartě klientky. V detailu služby si poskládáš vlastní kartu (formulář).</div>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Depilace" /></div>
+        <div class="field"><label>Délka (min)</label><select data-field="duration_minutes">${durationOptions()
+          .map((value) => `<option value="${value}">${value}</option>`)
+          .join('')}</select></div>
+      </div>
+      <div class="actions-row services-actions">
+        <button class="ghost" data-action="reset">Nový</button>
+        <button class="primary" data-action="save">Uložit</button>
+      </div>
+
+      <div class="subservice-panel" id="subservicePanel">
+        <div class="panel-header">
+          <div>
+            <h4>Podslužby</h4>
+            <div class="meta" id="subserviceMeta">Pro podslužby nejdřív ulož službu a poté klikni v seznamu na „Upravit“.</div>
+          </div>
+        </div>
+        <div class="field-row subservice-row">
+          <div class="field"><label>Název podslužby</label><input type="text" id="subServiceName" placeholder="Např. Depilace nohou" /></div>
+          <div class="field"><label>Délka (min)</label><select id="subServiceDuration">${durationOptions()
+            .map((value) => `<option value="${value}">${value}</option>`)
+            .join('')}</select></div>
+        </div>
+        <div class="actions-row services-actions">
+          <button type="button" class="ghost" id="subServiceAdd">+ Přidat podslužbu</button>
+        </div>
+        <div class="settings-list" id="subServiceList"></div>
+      </div>
+
+      <div class="settings-list" id="serviceList"></div>
+    </div>
+  `;
+}
+
 function renderSettingsTabContent(tabKey) {
   const content = document.getElementById('settingsContent');
   if (!content) return;
@@ -2629,16 +2720,7 @@ function renderSettingsTabContent(tabKey) {
   if (tabKey === 'logo') {
     html = brandingSectionTemplate();
   } else if (tabKey === 'services') {
-    html = settingsSectionTemplate({
-      title: 'Služby',
-      subtitle: 'Služby pro výběr v kartě klientky. V detailu služby si poskládáš vlastní kartu (formulář).',
-      formId: 'services',
-      listId: 'serviceList',
-      fields: [
-        '<div class="field"><label>Název</label><input type="text" data-field="name" placeholder="Např. Kosmetika" /></div>',
-        '<div class="field"><label>Délka (min)</label><select data-field="duration_minutes"><option value="30">30</option><option value="60">60</option><option value="90">90</option><option value="120">120</option><option value="150">150</option><option value="180">180</option></select></div>'
-      ]
-    });
+    html = servicesSettingsPageTemplate();
   } else if (tabKey === 'users') {
     html = settingsSectionTemplate({
       title: 'Uživatelé',
@@ -2660,6 +2742,10 @@ function renderSettingsTabContent(tabKey) {
 
   renderSettingsLists();
   wireSettingsForms();
+  if (tabKey === 'services') {
+    wireServicesSubservices();
+    refreshServiceSubservicesPanel();
+  }
   wireBrandSettings();
 
   document.querySelectorAll('[data-clones-tab]').forEach((button) => {
@@ -2723,15 +2809,62 @@ async function openSettingsModal(initialTab = '') {
 function renderSettingsLists() {
   const serviceList = document.getElementById('serviceList');
   if (serviceList) {
-    serviceList.innerHTML = state.settings.services
-      .map((item) => {
-        const durationLabel = `${item.duration_minutes || 30} min`;
-        const schema = parseServiceSchemaJson(item.form_schema_json);
-        const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
-        const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
-        return settingsItemTemplate(item, `${durationLabel} • ${schemaLabel}`, 'services');
-      })
-      .join('');
+    const services = Array.isArray(state.settings.services) ? state.settings.services : [];
+    const collator = new Intl.Collator('cs', { sensitivity: 'base' });
+    const childrenByParent = new Map();
+    services.forEach((service) => {
+      const key = service.parent_id ? String(service.parent_id) : '';
+      if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+      childrenByParent.get(key).push(service);
+    });
+    for (const list of childrenByParent.values()) {
+      list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
+    }
+
+    const parentIds = new Set(services.filter((s) => s.parent_id).map((s) => String(s.parent_id)));
+
+    const rowHtml = (item, level = 0) => {
+      const durationLabel = `${item.duration_minutes || 30} min`;
+      const schema = parseServiceSchemaJson(item.form_schema_json);
+      const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
+      const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
+      const hasChildren = parentIds.has(String(item.id));
+      const indent = Math.max(0, level) * 18;
+      return `
+        <div class="settings-item service-tree-item${hasChildren ? ' is-parent' : ''}">
+          <span class="service-tree-label">
+            <span class="service-tree-indent" style="width:${indent}px"></span>
+            <span class="service-tree-name">${escapeHtml(item.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(schemaLabel)}</span>
+          </span>
+          <div class="settings-actions">
+            <button class="ghost" data-action="edit" data-section="services" data-id="${item.id}">Upravit</button>
+            <button class="ghost" data-action="delete" data-section="services" data-id="${item.id}">Smazat</button>
+          </div>
+        </div>
+      `;
+    };
+
+    const visited = new Set();
+    const renderTree = (parentKey, level) => {
+      const list = childrenByParent.get(parentKey) || [];
+      return list
+        .map((item) => {
+          if (visited.has(item.id)) return '';
+          visited.add(item.id);
+          const children = renderTree(String(item.id), level + 1);
+          return rowHtml(item, level) + children;
+        })
+        .join('');
+    };
+
+    let html = renderTree('', 0);
+    // Append orphans (bad parent_id).
+    services.forEach((item) => {
+      if (!visited.has(item.id)) {
+        html += rowHtml(item, 0);
+      }
+    });
+    serviceList.innerHTML = html;
   }
 
   const skinList = document.getElementById('skinList');
@@ -2976,8 +3109,118 @@ function wireSettingsForms() {
           input.value = '';
         }
       });
+      if (key === 'services') {
+        refreshServiceSubservicesPanel();
+      }
     });
 
+  });
+}
+
+function wireServicesSubservices() {
+  const form = document.querySelector('[data-form="services"]');
+  if (!form) return;
+  const addBtn = document.getElementById('subServiceAdd');
+  if (!addBtn) return;
+
+  addBtn.addEventListener('click', async () => {
+    const parentId = (form.dataset.editing || '').toString();
+    if (!parentId) {
+      alert('Pro podslužbu nejdřív ulož službu a poté ji vyber přes „Upravit“ v seznamu.');
+      return;
+    }
+    const nameInput = document.getElementById('subServiceName');
+    const durationSelect = document.getElementById('subServiceDuration');
+    const name = (nameInput?.value || '').trim();
+    const duration = (durationSelect?.value || '').trim() || '30';
+    if (!name) {
+      alert('Vyplň název podslužby.');
+      return;
+    }
+    addBtn.disabled = true;
+    try {
+      await api.post('/api/services', {
+        name,
+        duration_minutes: duration,
+        parent_id: parentId
+      });
+      if (nameInput) nameInput.value = '';
+      await loadSettings();
+      renderSettingsLists();
+      refreshServiceSubservicesPanel();
+    } finally {
+      addBtn.disabled = false;
+    }
+  });
+}
+
+function refreshServiceSubservicesPanel() {
+  const form = document.querySelector('[data-form="services"]');
+  const list = document.getElementById('subServiceList');
+  const meta = document.getElementById('subserviceMeta');
+  const addBtn = document.getElementById('subServiceAdd');
+  const nameInput = document.getElementById('subServiceName');
+  const durationSelect = document.getElementById('subServiceDuration');
+  if (!form || !list || !meta || !addBtn) return;
+
+  const parentId = (form.dataset.editing || '').toString();
+  const parent = parentId ? state.settings.services.find((service) => service.id === parentId) : null;
+  const children = parentId
+    ? state.settings.services.filter((service) => (service.parent_id || '') === parentId)
+    : [];
+
+  const disabled = !parentId;
+  addBtn.disabled = disabled;
+  if (nameInput) nameInput.disabled = disabled;
+  if (durationSelect) durationSelect.disabled = disabled;
+
+  if (!parentId || !parent) {
+    meta.textContent = 'Pro podslužby nejdřív ulož službu a poté klikni v seznamu na „Upravit“.';
+    list.innerHTML = '';
+    return;
+  }
+
+  meta.textContent = children.length
+    ? `Podslužby pro "${parent.name}".`
+    : `Zatím bez podslužeb pro "${parent.name}".`;
+
+  list.innerHTML = children
+    .map((child) => {
+      const durationLabel = `${child.duration_minutes || 30} min`;
+      const schema = parseServiceSchemaJson(child.form_schema_json);
+      const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
+      const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
+      return `
+        <div class="settings-item">
+          <span>${escapeHtml(child.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(schemaLabel)}</span>
+          <div class="settings-actions">
+            <button class="ghost" data-action="edit" data-id="${child.id}">Upravit</button>
+            <button class="ghost" data-action="delete" data-id="${child.id}">Smazat</button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  list.querySelectorAll('button[data-action="edit"]').forEach((button) => {
+    button.addEventListener('click', () => openServiceDetailModal(button.dataset.id));
+  });
+  list.querySelectorAll('button[data-action="delete"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.dataset.id;
+      if (!id) return;
+      const ok = confirm('Opravdu smazat podslužbu?');
+      if (!ok) return;
+      button.disabled = true;
+      try {
+        await api.del(`/api/services/${id}`);
+        await loadSettings();
+        renderSettingsLists();
+        refreshServiceSubservicesPanel();
+      } finally {
+        button.disabled = false;
+      }
+    });
   });
 }
 
@@ -3006,6 +3249,10 @@ function startEditSetting(section, id) {
     const value = item[input.dataset.field] ?? '';
     input.value = value;
   });
+
+  if (section === 'services') {
+    refreshServiceSubservicesPanel();
+  }
 }
 
 function startEditUser(id) {

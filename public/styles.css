@@ -398,6 +398,22 @@ button.primary:hover {
   font-size: 12px;
 }
 
+.public-service-group {
+  width: 100%;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 8px 0 2px;
+}
+
+.service-group {
+  width: 100%;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 10px 0 6px;
+}
+
 .date-availability {
   margin-top: 10px;
   border: 1px solid var(--border);
@@ -1091,6 +1107,37 @@ button.primary:hover {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
+}
+
+.services-actions button {
+  padding-left: 18px;
+  padding-right: 18px;
+}
+
+.subservice-panel {
+  border-top: 1px dashed var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.service-tree-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.service-tree-indent {
+  display: inline-block;
+  flex: 0 0 auto;
+}
+
+.service-tree-name {
+  overflow-wrap: anywhere;
+}
+
+.service-tree-item.is-parent .service-tree-name {
+  font-weight: 700;
 }
 
 @media (max-width: 860px) {

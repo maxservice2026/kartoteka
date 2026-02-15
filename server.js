@@ -579,6 +579,7 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS services (
       id TEXT PRIMARY KEY,
       tenant_id TEXT,
+      parent_id TEXT,
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
       duration_minutes INTEGER NOT NULL DEFAULT 30,
@@ -753,6 +754,7 @@ async function initDb() {
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('services', 'form_schema_json', 'TEXT');
+  await ensureColumn('services', 'parent_id', 'TEXT');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('tenants', 'domain', 'TEXT');
   await ensureColumn('tenants', 'logo_data', 'TEXT');
@@ -967,13 +969,67 @@ async function otherSuperAdminCount(excludeId, tenantId) {
   return toInt(row?.count, 0);
 }
 
+function sortServicesAsTree(rows) {
+  const collator = new Intl.Collator('cs', { sensitivity: 'base' });
+  const byParent = new Map();
+  rows.forEach((row) => {
+    const parentKey = row.parent_id ? String(row.parent_id) : '';
+    if (!byParent.has(parentKey)) byParent.set(parentKey, []);
+    byParent.get(parentKey).push(row);
+  });
+  for (const list of byParent.values()) {
+    list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
+  }
+
+  const ordered = [];
+  const visited = new Set();
+
+  const walk = (parentKey) => {
+    const list = byParent.get(parentKey) || [];
+    list.forEach((row) => {
+      if (visited.has(row.id)) return;
+      visited.add(row.id);
+      ordered.push(row);
+      walk(String(row.id));
+    });
+  };
+
+  walk('');
+
+  // append any orphans (parent_id points to missing/disabled service)
+  rows.forEach((row) => {
+    if (!visited.has(row.id)) ordered.push(row);
+  });
+
+  return ordered;
+}
+
 async function getSettings(tenantId) {
   const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
-  const services = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name', [tenantId]);
+  const servicesRaw = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ?', [tenantId]);
+  const services = sortServicesAsTree(servicesRaw);
   const treatments = await db.all('SELECT * FROM treatments WHERE active = 1 ORDER BY name');
   const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
   const workers = await db.all('SELECT id, full_name as name FROM users WHERE active = 1 AND tenant_id = ? ORDER BY full_name', [tenantId]);
   return { skinTypes, services, treatments, addons, workers };
+}
+
+async function deactivateServiceTree(serviceId, tenantId) {
+  const queue = [serviceId];
+  const seen = new Set();
+  while (queue.length) {
+    const current = queue.pop();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+
+    await db.run('UPDATE services SET active = 0 WHERE id = ? AND tenant_id = ?', [current, tenantId]);
+
+    const children = await db.all(
+      'SELECT id FROM services WHERE active = 1 AND tenant_id = ? AND parent_id = ?',
+      [tenantId, current]
+    );
+    children.forEach((row) => queue.push(row.id));
+  }
 }
 
 function normalizeClonePlan(value) {
@@ -1115,7 +1171,7 @@ app.get('/api/pro-access', (req, res) => {
 
 app.get('/api/public/services', async (req, res) => {
   const services = await db.all(
-    'SELECT id, name, duration_minutes FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    'SELECT id, parent_id, name, duration_minutes FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
     [req.tenant.id]
   );
   res.json({ services });
@@ -1148,6 +1204,16 @@ async function resolveSelectedServices(serviceIds, tenantId) {
   if (serviceRows.length !== serviceIds.length) {
     return { error: 'Některá služba není platná.', status: 400 };
   }
+
+  // Disallow selecting a parent service when it has subservices (booking should use leaf service).
+  const hasChildren = await db.get(
+    `SELECT 1 as hit FROM services WHERE active = 1 AND tenant_id = ? AND parent_id IN (${placeholders}) LIMIT 1`,
+    params
+  );
+  if (hasChildren) {
+    return { error: 'Vyberte konkrétní podslužbu (služba má podslužby).', status: 400 };
+  }
+
   const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
   const duration = serviceIds.reduce(
     (sum, id) => sum + Math.max(30, toInt(serviceById.get(id)?.duration_minutes, 30)),
@@ -1633,7 +1699,9 @@ app.get('/api/reservations', requireFeature('calendar'), async (req, res) => {
 app.post('/api/services', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
-  const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
+  const parentIdRaw = (payload.parent_id || '').toString().trim();
+  const parentId = parentIdRaw ? parentIdRaw : null;
+  let formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 30);
   const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
@@ -1642,6 +1710,18 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   }
 
   let schemaJson = null;
+  let parentSchemaJson = null;
+  if (parentId) {
+    const parent = await db.get(
+      'SELECT id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
+      [parentId, req.tenant.id]
+    );
+    if (!parent) {
+      return res.status(400).json({ error: 'Rodičovská služba nenalezena.' });
+    }
+    formType = parent.form_type || formType;
+    parentSchemaJson = parent.form_schema_json || null;
+  }
   if (schemaProvided) {
     if (payload.form_schema === null) {
       schemaJson = null;
@@ -1661,12 +1741,14 @@ app.post('/api/services', requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'form_schema je příliš velké.' });
       }
     }
+  } else if (parentSchemaJson) {
+    schemaJson = parentSchemaJson;
   }
 
   const id = newId();
   await db.run(
-    'INSERT INTO services (id, tenant_id, name, form_type, duration_minutes, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, req.tenant.id, name, formType, duration, schemaJson, nowIso()]
+    'INSERT INTO services (id, tenant_id, parent_id, name, form_type, duration_minutes, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, req.tenant.id, parentId, name, formType, duration, schemaJson, nowIso()]
   );
   res.json({ id });
 });
@@ -1718,7 +1800,7 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
 });
 
 app.delete('/api/services/:id', requireAdmin, async (req, res) => {
-  await db.run('UPDATE services SET active = 0 WHERE id = ? AND tenant_id = ?', [req.params.id, req.tenant.id]);
+  await deactivateServiceTree(req.params.id, req.tenant.id);
   res.json({ ok: true });
 });
 

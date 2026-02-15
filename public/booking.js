@@ -26,6 +26,15 @@ const state = {
   dateMapMonth: null
 };
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function todayLocal() {
   const d = new Date();
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
@@ -74,17 +83,45 @@ async function fetchServices() {
   const response = await fetch('/api/public/services');
   const data = await response.json();
   state.services = data.services || [];
-  dom.services.innerHTML = state.services
-    .map(
-      (service) => `
-        <label class="service-pill" data-service-id="${service.id}">
-          <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
-          <span class="service-pill-name">${service.name}</span>
-          <span class="service-pill-duration">${service.duration_minutes || 30} min</span>
-        </label>
-      `
-    )
-    .join('');
+
+  const services = Array.isArray(state.services) ? state.services : [];
+  const collator = new Intl.Collator('cs', { sensitivity: 'base' });
+  const childrenByParent = new Map();
+  services.forEach((service) => {
+    const key = service.parent_id ? String(service.parent_id) : '';
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(service);
+  });
+  for (const list of childrenByParent.values()) {
+    list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
+  }
+
+  const parentIds = new Set(services.filter((s) => s.parent_id).map((s) => String(s.parent_id)));
+
+  const renderTree = (parentKey, level) => {
+    const list = childrenByParent.get(parentKey) || [];
+    return list
+      .map((service) => {
+        const hasChildren = parentIds.has(String(service.id));
+        const indent = Math.max(0, level) * 16;
+        if (hasChildren) {
+          return `
+            <div class="public-service-group" style="margin-left:${indent}px">${escapeHtml(service.name)}</div>
+            ${renderTree(String(service.id), level + 1)}
+          `;
+        }
+        return `
+          <label class="service-pill" data-service-id="${service.id}" style="margin-left:${indent}px">
+            <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
+            <span class="service-pill-name">${escapeHtml(service.name)}</span>
+            <span class="service-pill-duration">${Number(service.duration_minutes) || 30} min</span>
+          </label>
+        `;
+      })
+      .join('');
+  };
+
+  dom.services.innerHTML = renderTree('', 0);
 
   document.querySelectorAll('.public-service-checkbox').forEach((input) => {
     input.addEventListener('change', () => {
@@ -116,8 +153,8 @@ function syncSelectedServices() {
 
 function monthLabel(year, month) {
   const names = [
-    'leden', 'unor', 'brezen', 'duben', 'kveten', 'cerven',
-    'cervenec', 'srpen', 'zari', 'rijen', 'listopad', 'prosinec'
+    'leden', 'únor', 'březen', 'duben', 'květen', 'červen',
+    'červenec', 'srpen', 'září', 'říjen', 'listopad', 'prosinec'
   ];
   return `${names[month - 1]} ${year}`;
 }
