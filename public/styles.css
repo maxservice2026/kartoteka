@@ -1114,6 +1114,32 @@ button.primary:hover {
   padding-right: 18px;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.subservice-edit-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.subservice-edit-item {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
 .subservice-panel {
   border-top: 1px dashed var(--border);
   margin-top: 12px;

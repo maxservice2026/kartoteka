@@ -2459,33 +2459,27 @@ async function openServiceDetailModal(serviceId) {
           <div class="meta hidden" id="serviceDurationLockedHint">Délka se nastavuje u podslužeb.</div>
         </div>
       </div>
+      <div class="divider"></div>
+      <label class="checkbox-row">
+        <input type="checkbox" id="serviceUseSubservices" />
+        Přidat podslužby
+      </label>
+      <div class="meta">Podslužby jsou konkrétní varianty služby (např. depilace nohou). Čas se nastavuje u podslužeb.</div>
         <div class="actions-row">
           <button class="primary" id="serviceSave">Uložit službu</button>
         </div>
       </div>
-      <div class="settings-section" id="serviceSubservicesSection">
+      <div class="settings-section hidden" id="serviceSubservicesSection">
         <div class="panel-header">
           <div>
             <h3>Podslužby</h3>
-            <div class="meta">Kliknutím na + přidáš konkrétní varianty služby (např. depilace nohou). Čas nastavuješ u podslužeb.</div>
+            <div class="meta" id="serviceSubservicesMeta">Nastav podslužby a jejich časovou dotaci.</div>
           </div>
         </div>
-        <div class="field-row subservice-row">
-          <div class="field">
-            <label>Název podslužby</label>
-            <input type="text" id="serviceSubName" placeholder="Např. Depilace nohou" />
-          </div>
-          <div class="field">
-            <label>Délka (min)</label>
-            <select id="serviceSubDuration">
-              ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
-            </select>
-          </div>
-        </div>
+        <div class="subservice-edit-list" id="serviceSubRows"></div>
         <div class="actions-row services-actions">
-          <button type="button" class="ghost" id="serviceSubAdd">+ Přidat podslužbu</button>
+          <button type="button" class="ghost" id="serviceSubRowAdd">+ Přidat podslužbu</button>
         </div>
-        <div class="settings-list" id="serviceSubList"></div>
       </div>
       <div class="settings-section">
         <div class="panel-header">
@@ -2531,88 +2525,110 @@ async function openServiceDetailModal(serviceId) {
   const nameInput = document.getElementById('serviceEditName');
   const durationSelect = document.getElementById('serviceEditDuration');
   const durationLockedHint = document.getElementById('serviceDurationLockedHint');
+  const useSubservicesToggle = document.getElementById('serviceUseSubservices');
   nameInput.value = service.name || '';
   durationSelect.value = String(service.duration_minutes || 30);
 
-  const subNameInput = document.getElementById('serviceSubName');
-  const subDurationSelect = document.getElementById('serviceSubDuration');
-  const subAddBtn = document.getElementById('serviceSubAdd');
-  const subList = document.getElementById('serviceSubList');
+  const subSection = document.getElementById('serviceSubservicesSection');
+  const subMeta = document.getElementById('serviceSubservicesMeta');
+  const subRows = document.getElementById('serviceSubRows');
+  const subAddRowBtn = document.getElementById('serviceSubRowAdd');
+  const removedSubserviceIds = new Set();
 
   const getServiceChildren = () => {
     const parentId = String(service.id);
     return state.settings.services.filter((item) => String(item.parent_id || '') === parentId);
   };
 
-  const renderSubservices = () => {
-    if (!subList) return;
-    const children = getServiceChildren();
-    const hasChildren = children.length > 0;
-
-    // Pokud existují podslužby, délka nadřazené služby se nepoužívá.
-    durationSelect.disabled = hasChildren;
-    if (durationLockedHint) durationLockedHint.classList.toggle('hidden', !hasChildren);
-
-    if (!children.length) {
-      subList.innerHTML = '<div class="hint">Zatím bez podslužeb.</div>';
-      return;
-    }
-
-    subList.innerHTML = children
-      .map((child) => {
-        const durationLabel = `${child.duration_minutes || 30} min`;
-        return `
-          <div class="settings-item">
-            <span>${escapeHtml(child.name)} • ${escapeHtml(durationLabel)}</span>
-            <div class="settings-actions">
-              <button type="button" class="ghost" data-action="edit" data-id="${child.id}">Upravit</button>
-              <button type="button" class="ghost" data-action="delete" data-id="${child.id}">Smazat</button>
-            </div>
-          </div>
-        `;
-      })
+  const durationSelectHtml = (selected) =>
+    durationOptions()
+      .map((value) => `<option value="${value}"${String(value) === String(selected) ? ' selected' : ''}>${value}</option>`)
       .join('');
 
-    subList.querySelectorAll('button[data-action="edit"]').forEach((button) => {
-      button.addEventListener('click', () => openServiceDetailModal(button.dataset.id));
-    });
-    subList.querySelectorAll('button[data-action="delete"]').forEach((button) => {
-      button.addEventListener('click', async () => {
-        const id = button.dataset.id;
-        if (!id) return;
-        const ok = confirm('Opravdu smazat podslužbu?');
-        if (!ok) return;
-        button.disabled = true;
-        try {
-          await api.del(`/api/services/${id}`);
-          await loadSettings();
-          renderSubservices();
-        } finally {
-          button.disabled = false;
-        }
+  const subRowTemplate = (row) => {
+    const id = row?.id ? String(row.id) : '';
+    const name = row?.name || '';
+    const duration = row?.duration_minutes || 30;
+    return `
+      <div class="subservice-edit-item" data-sub-id="${escapeHtml(id)}">
+        <div class="field-row">
+          <div class="field">
+            <label>Název podslužby</label>
+            <input type="text" data-sub-field="name" value="${escapeHtml(name)}" placeholder="Např. Depilace nohou" />
+          </div>
+          <div class="field">
+            <label>Délka (min)</label>
+            <select data-sub-field="duration_minutes">${durationSelectHtml(duration)}</select>
+          </div>
+        </div>
+        <div class="actions-row">
+          <button type="button" class="ghost" data-action="remove-subservice">Smazat podslužbu</button>
+        </div>
+      </div>
+    `;
+  };
+
+  const wireSubRowActions = () => {
+    if (!subRows) return;
+    subRows.querySelectorAll('button[data-action="remove-subservice"]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const item = button.closest('.subservice-edit-item');
+        if (!item) return;
+        const id = (item.dataset.subId || '').toString();
+        if (id) removedSubserviceIds.add(id);
+        item.remove();
       });
     });
   };
 
-  if (subAddBtn) {
-    subAddBtn.addEventListener('click', async () => {
-      const name = (subNameInput?.value || '').trim();
-      const duration = (subDurationSelect?.value || '').toString().trim() || '30';
-      if (!name) {
-        alert('Vyplň název podslužby.');
-        return;
-      }
-      subAddBtn.disabled = true;
-      try {
-        await api.post('/api/services', { name, duration_minutes: duration, parent_id: service.id });
-        if (subNameInput) subNameInput.value = '';
-        await loadSettings();
-        renderSubservices();
-      } finally {
-        subAddBtn.disabled = false;
-      }
+  const addBlankSubRow = () => {
+    if (!subRows) return;
+    subRows.insertAdjacentHTML('beforeend', subRowTemplate({ id: '', name: '', duration_minutes: 30 }));
+    wireSubRowActions();
+  };
+
+  const setSubservicesEnabled = (enabled) => {
+    if (!subSection) return;
+    subSection.classList.toggle('hidden', !enabled);
+    durationSelect.disabled = enabled;
+    if (durationLockedHint) durationLockedHint.classList.toggle('hidden', !enabled);
+    if (!enabled && subRows) {
+      subRows.innerHTML = '';
+    }
+    if (enabled && subRows && !subRows.children.length) {
+      addBlankSubRow();
+    }
+  };
+
+  const initialChildren = getServiceChildren();
+  const hasChildren = initialChildren.length > 0;
+
+  if (subRows) {
+    subRows.innerHTML = initialChildren.map((child) => subRowTemplate(child)).join('');
+    wireSubRowActions();
+  }
+  if (subMeta) {
+    subMeta.textContent = hasChildren ? `Podslužby pro "${service.name}".` : 'Nastav podslužby a jejich časovou dotaci.';
+  }
+
+  if (useSubservicesToggle) {
+    useSubservicesToggle.checked = hasChildren;
+    useSubservicesToggle.disabled = hasChildren;
+    useSubservicesToggle.addEventListener('change', () => {
+      setSubservicesEnabled(Boolean(useSubservicesToggle.checked));
     });
   }
+  if (subAddRowBtn) {
+    subAddRowBtn.addEventListener('click', () => {
+      if (useSubservicesToggle && !useSubservicesToggle.checked) {
+        useSubservicesToggle.checked = true;
+        setSubservicesEnabled(true);
+      }
+      addBlankSubRow();
+    });
+  }
+
+  setSubservicesEnabled(Boolean(useSubservicesToggle?.checked));
 
   const schemaBuilder = document.getElementById('schemaBuilder');
   const schemaPreview = document.getElementById('schemaPreviewFields');
@@ -2633,7 +2649,6 @@ async function openServiceDetailModal(serviceId) {
 
   renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
   renderSchemaPreview();
-  renderSubservices();
 
   document.getElementById('schemaAddField').addEventListener('click', () => {
     const nextLabel = `Pole ${schemaDraft.fields.length + 1}`;
@@ -2647,14 +2662,44 @@ async function openServiceDetailModal(serviceId) {
   });
 
   document.getElementById('serviceSave').addEventListener('click', async () => {
-    const payload = {
-      name: nameInput.value.trim(),
-      duration_minutes: durationSelect.value
-    };
+    const saveBtn = document.getElementById('serviceSave');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      const useSubservices = Boolean(useSubservicesToggle?.checked);
+
+      const payload = {
+        name: nameInput.value.trim(),
+        duration_minutes: durationSelect.value,
+        form_type: service.form_type || 'generic'
+      };
     if (!payload.name) {
       alert('Vyplň název služby.');
       return;
     }
+
+      const subserviceItems = useSubservices
+        ? Array.from(subRows?.querySelectorAll('.subservice-edit-item') || []).map((item) => {
+            const id = (item.dataset.subId || '').toString().trim();
+            const name = (item.querySelector('[data-sub-field="name"]')?.value || '').trim();
+            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '30';
+            return { id, name, duration_minutes: duration };
+          })
+        : [];
+
+      if (useSubservices) {
+        if (!subserviceItems.length) {
+          if (!hasChildren) {
+            alert('Přidej alespoň jednu podslužbu.');
+            return;
+          }
+          const ok = confirm('Odstranit všechny podslužby?');
+          if (!ok) return;
+        }
+        if (subserviceItems.some((item) => !item.name)) {
+          alert('Vyplň název u každé podslužby (nebo ji smaž).');
+          return;
+        }
+      }
 
     const schemaFields = Array.isArray(schemaDraft.fields) ? schemaDraft.fields : [];
     if (schemaFields.length) {
@@ -2694,9 +2739,35 @@ async function openServiceDetailModal(serviceId) {
       payload.form_schema = null;
     }
 
-    await api.put(`/api/services/${service.id}`, payload);
-    await loadSettings();
-    closeModal();
+      await api.put(`/api/services/${service.id}`, payload);
+
+      if (useSubservices) {
+        for (const id of removedSubserviceIds) {
+          await api.del(`/api/services/${id}`);
+        }
+        for (const sub of subserviceItems) {
+          if (sub.id) {
+            const existingChild = state.settings.services.find((item) => item.id === sub.id);
+            await api.put(`/api/services/${sub.id}`, {
+              name: sub.name,
+              duration_minutes: sub.duration_minutes,
+              form_type: existingChild?.form_type || service.form_type || 'generic'
+            });
+          } else {
+            await api.post('/api/services', {
+              name: sub.name,
+              duration_minutes: sub.duration_minutes,
+              parent_id: service.id
+            });
+          }
+        }
+      }
+
+      await loadSettings();
+      closeModal();
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
   });
 }
 
