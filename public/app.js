@@ -2421,9 +2421,94 @@ function renderFeatureMatrix() {
   });
 }
 
+async function openSubserviceDetailModal(service, parentService) {
+  const parentName = parentService?.name || 'hlavní služba';
+
+  openModal(`
+    <div class="modal-header">
+      <div>
+        <h2>${escapeHtml(service.name || '')}</h2>
+        <div class="meta">Podslužba • karta (formulář) se dědí z hlavní služby: ${escapeHtml(parentName)}.</div>
+      </div>
+      <div class="actions-row">
+        ${parentService ? `<button class="ghost" id="editParentService">Upravit hlavní službu</button>` : ''}
+        <button class="ghost" id="backToSettings">Zpět</button>
+        <button class="ghost" id="closeModal">Zavřít</button>
+      </div>
+    </div>
+    <div class="modal-grid">
+      <div class="settings-section" data-service-edit>
+        <div class="panel-header">
+          <div>
+            <h3>Základní údaje</h3>
+            <div class="meta">Název a délka podslužby.</div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>Název</label>
+            <input id="subserviceEditName" type="text" />
+          </div>
+          <div class="field">
+            <label>Délka (min)</label>
+            <select id="subserviceEditDuration">
+              ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="meta">Kartu služby upravíš v hlavní službě: <strong>${escapeHtml(parentName)}</strong>.</div>
+        <div class="actions-row">
+          <button class="primary" id="subserviceSave">Uložit</button>
+        </div>
+      </div>
+    </div>
+  `);
+
+  document.getElementById('closeModal').addEventListener('click', closeModal);
+  document.getElementById('backToSettings').addEventListener('click', () => {
+    openSettingsModal('services').catch(() => {});
+  });
+  const editParentBtn = document.getElementById('editParentService');
+  if (editParentBtn && parentService) {
+    editParentBtn.addEventListener('click', () => openServiceDetailModal(parentService.id));
+  }
+
+  const nameInput = document.getElementById('subserviceEditName');
+  const durationSelect = document.getElementById('subserviceEditDuration');
+  nameInput.value = service.name || '';
+  durationSelect.value = String(service.duration_minutes || 30);
+
+  document.getElementById('subserviceSave').addEventListener('click', async () => {
+    const saveBtn = document.getElementById('subserviceSave');
+    if (saveBtn) saveBtn.disabled = true;
+    try {
+      const payload = {
+        name: nameInput.value.trim(),
+        duration_minutes: durationSelect.value
+      };
+      if (!payload.name) {
+        alert('Vyplň název podslužby.');
+        return;
+      }
+      await api.put(`/api/services/${service.id}`, payload);
+      await loadSettings();
+      closeModal();
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  });
+}
+
 async function openServiceDetailModal(serviceId) {
   const service = state.settings.services.find((item) => item.id === serviceId);
   if (!service) return;
+
+  const parentId = (service.parent_id || '').toString().trim();
+  if (parentId) {
+    const parentService = state.settings.services.find((item) => item.id === parentId) || null;
+    await openSubserviceDetailModal(service, parentService);
+    return;
+  }
 
   let schemaDraft = normalizeSchemaDraft(parseServiceSchemaJson(service.form_schema_json));
 
@@ -2985,7 +3070,14 @@ function renderSettingsLists() {
     const rowHtml = (item, level = 0) => {
       const schema = parseServiceSchemaJson(item.form_schema_json);
       const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
-      const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
+      const inherits = Boolean(item.parent_id) && (item.inherits_form === 1 || item.inherits_form === true || item.inherits_form === '1');
+      const schemaLabel = inherits
+        ? fieldsCount
+          ? `karta: ${fieldsCount} polí (dědí)`
+          : 'bez karty (dědí)'
+        : fieldsCount
+          ? `karta: ${fieldsCount} polí`
+          : 'bez karty';
       const hasChildren = parentIds.has(String(item.id));
       const durationLabel = hasChildren ? 'podslužby' : `${item.duration_minutes || 30} min`;
       const indent = Math.max(0, level) * 18;

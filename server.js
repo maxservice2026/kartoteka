@@ -1007,6 +1007,29 @@ function sortServicesAsTree(rows) {
 async function getSettings(tenantId) {
   const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
   const servicesRaw = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ?', [tenantId]);
+  // Podslužby dědí kartu a form_type z hlavní služby (parent).
+  // Neřešíme zatím víc než 1 úroveň stromu (parent -> child), ale je to připravené bezpečně.
+  const servicesById = new Map();
+  servicesRaw.forEach((row) => {
+    servicesById.set(row.id, row);
+  });
+  servicesRaw.forEach((row) => {
+    if (!row.parent_id) {
+      row.inherits_form = 0;
+      row.parent_name = null;
+      return;
+    }
+    const parent = servicesById.get(row.parent_id);
+    if (!parent) {
+      row.inherits_form = 0;
+      row.parent_name = null;
+      return;
+    }
+    row.parent_name = parent.name || null;
+    row.inherits_form = 1;
+    row.form_type = parent.form_type || row.form_type;
+    row.form_schema_json = parent.form_schema_json || null;
+  });
   const services = sortServicesAsTree(servicesRaw);
   const treatments = await db.all('SELECT * FROM treatments WHERE active = 1 ORDER BY name');
   const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
@@ -1703,14 +1726,12 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   const parentId = parentIdRaw ? parentIdRaw : null;
   let formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 30);
-  const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
   if (duration < 30 || duration % 30 !== 0) {
     return res.status(400).json({ error: 'duration must be in 30 minute steps' });
   }
 
   let schemaJson = null;
-  let parentSchemaJson = null;
   if (parentId) {
     const parent = await db.get(
       'SELECT id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
@@ -1720,9 +1741,9 @@ app.post('/api/services', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Rodičovská služba nenalezena.' });
     }
     formType = parent.form_type || formType;
-    parentSchemaJson = parent.form_schema_json || null;
-  }
-  if (schemaProvided) {
+    // Podslužby vždy dědí kartu z parent služby. (Ignore payload.form_schema)
+    schemaJson = parent.form_schema_json || null;
+  } else if (Object.prototype.hasOwnProperty.call(payload, 'form_schema')) {
     if (payload.form_schema === null) {
       schemaJson = null;
     } else {
@@ -1741,8 +1762,6 @@ app.post('/api/services', requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'form_schema je příliš velké.' });
       }
     }
-  } else if (parentSchemaJson) {
-    schemaJson = parentSchemaJson;
   }
 
   const id = newId();
@@ -1756,7 +1775,7 @@ app.post('/api/services', requireAdmin, async (req, res) => {
 app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
-  const formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
+  const requestedFormType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 30);
   const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
@@ -1765,13 +1784,25 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   }
 
   const existing = await db.get(
-    'SELECT id, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
+    'SELECT id, parent_id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
     [req.params.id, req.tenant.id]
   );
   if (!existing) return res.status(404).json({ error: 'Služba nenalezena.' });
 
+  let formType = requestedFormType;
   let schemaJson = existing.form_schema_json;
-  if (schemaProvided) {
+
+  if (existing.parent_id) {
+    // Podslužba: karta + form_type je vždy z parent služby. (Ignore payload.form_schema/form_type)
+    const parent = await db.get(
+      'SELECT id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
+      [existing.parent_id, req.tenant.id]
+    );
+    if (parent) {
+      formType = parent.form_type || formType;
+      schemaJson = parent.form_schema_json || null;
+    }
+  } else if (schemaProvided) {
     if (payload.form_schema === null) {
       schemaJson = null;
     } else {
@@ -1796,6 +1827,15 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
     'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
     [name, formType, duration, schemaJson, req.params.id, req.tenant.id]
   );
+
+  if (!existing.parent_id) {
+    // Hlavní služba: karta + form_type platí i pro všechny podslužby.
+    await db.run(
+      'UPDATE services SET form_type = ?, form_schema_json = ? WHERE parent_id = ? AND tenant_id = ? AND active = 1',
+      [formType, schemaJson, req.params.id, req.tenant.id]
+    );
+  }
+
   res.json({ ok: true });
 });
 
@@ -2384,7 +2424,18 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const service = payload.service_id
-    ? await db.get('SELECT id, name, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1', [payload.service_id, req.tenant.id])
+    ? await db.get(
+      `SELECT s.id, s.name,
+              COALESCE(p.form_type, s.form_type) as form_type,
+              COALESCE(p.form_schema_json, s.form_schema_json) as form_schema_json
+       FROM services s
+       LEFT JOIN services p
+         ON p.id = s.parent_id
+        AND p.tenant_id = s.tenant_id
+        AND p.active = 1
+       WHERE s.id = ? AND s.tenant_id = ? AND s.active = 1`,
+      [payload.service_id, req.tenant.id]
+    )
     : null;
   if (!service) return res.status(400).json({ error: 'Service is required' });
 
