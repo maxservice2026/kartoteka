@@ -2456,11 +2456,36 @@ async function openServiceDetailModal(serviceId) {
           <select id="serviceEditDuration">
             ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
           </select>
+          <div class="meta hidden" id="serviceDurationLockedHint">Délka se nastavuje u podslužeb.</div>
         </div>
       </div>
         <div class="actions-row">
           <button class="primary" id="serviceSave">Uložit službu</button>
         </div>
+      </div>
+      <div class="settings-section" id="serviceSubservicesSection">
+        <div class="panel-header">
+          <div>
+            <h3>Podslužby</h3>
+            <div class="meta">Kliknutím na + přidáš konkrétní varianty služby (např. depilace nohou). Čas nastavuješ u podslužeb.</div>
+          </div>
+        </div>
+        <div class="field-row subservice-row">
+          <div class="field">
+            <label>Název podslužby</label>
+            <input type="text" id="serviceSubName" placeholder="Např. Depilace nohou" />
+          </div>
+          <div class="field">
+            <label>Délka (min)</label>
+            <select id="serviceSubDuration">
+              ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="actions-row services-actions">
+          <button type="button" class="ghost" id="serviceSubAdd">+ Přidat podslužbu</button>
+        </div>
+        <div class="settings-list" id="serviceSubList"></div>
       </div>
       <div class="settings-section">
         <div class="panel-header">
@@ -2505,8 +2530,89 @@ async function openServiceDetailModal(serviceId) {
 
   const nameInput = document.getElementById('serviceEditName');
   const durationSelect = document.getElementById('serviceEditDuration');
+  const durationLockedHint = document.getElementById('serviceDurationLockedHint');
   nameInput.value = service.name || '';
   durationSelect.value = String(service.duration_minutes || 30);
+
+  const subNameInput = document.getElementById('serviceSubName');
+  const subDurationSelect = document.getElementById('serviceSubDuration');
+  const subAddBtn = document.getElementById('serviceSubAdd');
+  const subList = document.getElementById('serviceSubList');
+
+  const getServiceChildren = () => {
+    const parentId = String(service.id);
+    return state.settings.services.filter((item) => String(item.parent_id || '') === parentId);
+  };
+
+  const renderSubservices = () => {
+    if (!subList) return;
+    const children = getServiceChildren();
+    const hasChildren = children.length > 0;
+
+    // Pokud existují podslužby, délka nadřazené služby se nepoužívá.
+    durationSelect.disabled = hasChildren;
+    if (durationLockedHint) durationLockedHint.classList.toggle('hidden', !hasChildren);
+
+    if (!children.length) {
+      subList.innerHTML = '<div class="hint">Zatím bez podslužeb.</div>';
+      return;
+    }
+
+    subList.innerHTML = children
+      .map((child) => {
+        const durationLabel = `${child.duration_minutes || 30} min`;
+        return `
+          <div class="settings-item">
+            <span>${escapeHtml(child.name)} • ${escapeHtml(durationLabel)}</span>
+            <div class="settings-actions">
+              <button type="button" class="ghost" data-action="edit" data-id="${child.id}">Upravit</button>
+              <button type="button" class="ghost" data-action="delete" data-id="${child.id}">Smazat</button>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+
+    subList.querySelectorAll('button[data-action="edit"]').forEach((button) => {
+      button.addEventListener('click', () => openServiceDetailModal(button.dataset.id));
+    });
+    subList.querySelectorAll('button[data-action="delete"]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const id = button.dataset.id;
+        if (!id) return;
+        const ok = confirm('Opravdu smazat podslužbu?');
+        if (!ok) return;
+        button.disabled = true;
+        try {
+          await api.del(`/api/services/${id}`);
+          await loadSettings();
+          renderSubservices();
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  };
+
+  if (subAddBtn) {
+    subAddBtn.addEventListener('click', async () => {
+      const name = (subNameInput?.value || '').trim();
+      const duration = (subDurationSelect?.value || '').toString().trim() || '30';
+      if (!name) {
+        alert('Vyplň název podslužby.');
+        return;
+      }
+      subAddBtn.disabled = true;
+      try {
+        await api.post('/api/services', { name, duration_minutes: duration, parent_id: service.id });
+        if (subNameInput) subNameInput.value = '';
+        await loadSettings();
+        renderSubservices();
+      } finally {
+        subAddBtn.disabled = false;
+      }
+    });
+  }
 
   const schemaBuilder = document.getElementById('schemaBuilder');
   const schemaPreview = document.getElementById('schemaPreviewFields');
@@ -2527,6 +2633,7 @@ async function openServiceDetailModal(serviceId) {
 
   renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
   renderSchemaPreview();
+  renderSubservices();
 
   document.getElementById('schemaAddField').addEventListener('click', () => {
     const nextLabel = `Pole ${schemaDraft.fields.length + 1}`;
@@ -2824,11 +2931,11 @@ function renderSettingsLists() {
     const parentIds = new Set(services.filter((s) => s.parent_id).map((s) => String(s.parent_id)));
 
     const rowHtml = (item, level = 0) => {
-      const durationLabel = `${item.duration_minutes || 30} min`;
       const schema = parseServiceSchemaJson(item.form_schema_json);
       const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
       const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
       const hasChildren = parentIds.has(String(item.id));
+      const durationLabel = hasChildren ? 'podslužby' : `${item.duration_minutes || 30} min`;
       const indent = Math.max(0, level) * 18;
       return `
         <div class="settings-item service-tree-item${hasChildren ? ' is-parent' : ''}">
@@ -3161,6 +3268,7 @@ function refreshServiceSubservicesPanel() {
   const addBtn = document.getElementById('subServiceAdd');
   const nameInput = document.getElementById('subServiceName');
   const durationSelect = document.getElementById('subServiceDuration');
+  const parentDurationSelect = form?.querySelector('[data-field="duration_minutes"]');
   if (!form || !list || !meta || !addBtn) return;
 
   const parentId = (form.dataset.editing || '').toString();
@@ -3177,8 +3285,11 @@ function refreshServiceSubservicesPanel() {
   if (!parentId || !parent) {
     meta.textContent = 'Pro podslužby nejdřív ulož službu a poté klikni v seznamu na „Upravit“.';
     list.innerHTML = '';
+    if (parentDurationSelect) parentDurationSelect.disabled = false;
     return;
   }
+
+  if (parentDurationSelect) parentDurationSelect.disabled = children.length > 0;
 
   meta.textContent = children.length
     ? `Podslužby pro "${parent.name}".`
