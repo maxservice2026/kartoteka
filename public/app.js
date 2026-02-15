@@ -2865,25 +2865,6 @@ function servicesSettingsPageTemplate() {
         <button class="primary" data-action="save">Uložit</button>
       </div>
 
-      <div class="subservice-panel" id="subservicePanel">
-        <div class="panel-header">
-          <div>
-            <h4>Podslužby</h4>
-            <div class="meta" id="subserviceMeta">Pro podslužby nejdřív ulož službu a poté klikni v seznamu na „Upravit“.</div>
-          </div>
-        </div>
-        <div class="field-row subservice-row">
-          <div class="field"><label>Název podslužby</label><input type="text" id="subServiceName" placeholder="Např. Depilace nohou" /></div>
-          <div class="field"><label>Délka (min)</label><select id="subServiceDuration">${durationOptions()
-            .map((value) => `<option value="${value}">${value}</option>`)
-            .join('')}</select></div>
-        </div>
-        <div class="actions-row services-actions">
-          <button type="button" class="ghost" id="subServiceAdd">+ Přidat podslužbu</button>
-        </div>
-        <div class="settings-list" id="subServiceList"></div>
-      </div>
-
       <div class="settings-list" id="serviceList"></div>
     </div>
   `;
