@@ -16,7 +16,8 @@ const FEATURE_DEFINITIONS = [
   { key: 'economy', label: 'Ekonomika', defaults: { basic: false, pro: true, enterprise: true } },
   { key: 'calendar', label: 'Kalendář', defaults: { basic: false, pro: true, enterprise: true } },
   { key: 'billing', label: 'Fakturace', defaults: { basic: false, pro: true, enterprise: true } },
-  { key: 'notifications', label: 'Notifikace', defaults: { basic: false, pro: true, enterprise: true } }
+  { key: 'notifications', label: 'Notifikace', defaults: { basic: false, pro: true, enterprise: true } },
+  { key: 'inventory', label: 'Sklad', defaults: { basic: false, pro: true, enterprise: true } }
 ];
 const FEATURE_KEY_SET = new Set(FEATURE_DEFINITIONS.map((feature) => feature.key));
 const APP_STARTED_AT = new Date().toISOString();
@@ -159,6 +160,15 @@ function toDateOnly(input) {
 function toInt(value, fallback = 0) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function toFloat(value, fallback = 0) {
+  const n = Number.parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function roundQty(value) {
+  return Math.round(value * 1000) / 1000;
 }
 
 function pad2(value) {
@@ -593,6 +603,7 @@ async function initDb() {
       id TEXT PRIMARY KEY,
       tenant_id TEXT,
       parent_id TEXT,
+      inherits_form INTEGER NOT NULL DEFAULT 1,
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
       duration_minutes INTEGER NOT NULL DEFAULT 0,
@@ -758,6 +769,43 @@ async function initDb() {
       metadata_json TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      name TEXT NOT NULL,
+      unit TEXT NOT NULL DEFAULT 'ks',
+      price INTEGER NOT NULL DEFAULT 0,
+      quantity REAL NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS service_inventory_usage (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      service_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      FOREIGN KEY (item_id) REFERENCES inventory_items(id)
+    );
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      item_id TEXT NOT NULL,
+      service_id TEXT,
+      visit_id TEXT,
+      movement_type TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 0,
+      note TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES inventory_items(id),
+      FOREIGN KEY (service_id) REFERENCES services(id),
+      FOREIGN KEY (visit_id) REFERENCES visits(id)
+    );
   `);
 
   await ensureColumn('clients', 'cream', 'TEXT');
@@ -770,6 +818,7 @@ async function initDb() {
   await ensureColumn('services', 'price', 'INTEGER DEFAULT 0');
   await ensureColumn('services', 'form_schema_json', 'TEXT');
   await ensureColumn('services', 'parent_id', 'TEXT');
+  await ensureColumn('services', 'inherits_form', 'INTEGER DEFAULT 1');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
   await ensureColumn('tenants', 'domain', 'TEXT');
   await ensureColumn('tenants', 'logo_data', 'TEXT');
@@ -799,6 +848,22 @@ async function initDb() {
   await ensureColumn('tenant_features', 'feature_key', 'TEXT');
   await ensureColumn('tenant_features', 'enabled', 'INTEGER DEFAULT 0');
   await ensureColumn('tenant_features', 'updated_at', 'TEXT');
+  await ensureColumn('inventory_items', 'tenant_id', 'TEXT');
+  await ensureColumn('inventory_items', 'unit', "TEXT DEFAULT 'ks'");
+  await ensureColumn('inventory_items', 'price', 'INTEGER DEFAULT 0');
+  await ensureColumn('inventory_items', 'quantity', 'REAL DEFAULT 0');
+  await ensureColumn('inventory_items', 'active', 'INTEGER DEFAULT 1');
+  await ensureColumn('inventory_items', 'updated_at', 'TEXT');
+  await ensureColumn('service_inventory_usage', 'tenant_id', 'TEXT');
+  await ensureColumn('service_inventory_usage', 'quantity', 'REAL DEFAULT 0');
+  await ensureColumn('service_inventory_usage', 'active', 'INTEGER DEFAULT 1');
+  await ensureColumn('service_inventory_usage', 'updated_at', 'TEXT');
+  await ensureColumn('inventory_movements', 'tenant_id', 'TEXT');
+  await ensureColumn('inventory_movements', 'service_id', 'TEXT');
+  await ensureColumn('inventory_movements', 'visit_id', 'TEXT');
+  await ensureColumn('inventory_movements', 'movement_type', "TEXT DEFAULT 'adjust'");
+  await ensureColumn('inventory_movements', 'quantity', 'REAL DEFAULT 0');
+  await ensureColumn('inventory_movements', 'note', 'TEXT');
 
   if (db.isPostgres) {
     await db.exec('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key');
@@ -807,11 +872,26 @@ async function initDb() {
 
   await db.run('UPDATE services SET duration_minutes = 0 WHERE duration_minutes IS NULL');
   await db.run('UPDATE services SET price = 0 WHERE price IS NULL');
+  await db.run('UPDATE services SET inherits_form = 0 WHERE parent_id IS NULL OR parent_id = ?', ['']);
+  await db.run(
+    'UPDATE services SET inherits_form = 1 WHERE parent_id IS NOT NULL AND parent_id != ? AND (inherits_form IS NULL OR inherits_form NOT IN (0, 1))',
+    ['']
+  );
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
   await db.run('UPDATE users SET is_superadmin = 0 WHERE is_superadmin IS NULL');
   await db.run('UPDATE tenants SET active = 1 WHERE active IS NULL');
   await db.run('UPDATE tenants SET updated_at = created_at WHERE updated_at IS NULL');
+  await db.run('UPDATE inventory_items SET unit = ? WHERE unit IS NULL OR unit = ?', ['ks', '']);
+  await db.run('UPDATE inventory_items SET price = 0 WHERE price IS NULL');
+  await db.run('UPDATE inventory_items SET quantity = 0 WHERE quantity IS NULL');
+  await db.run('UPDATE inventory_items SET active = 1 WHERE active IS NULL');
+  await db.run('UPDATE inventory_items SET updated_at = created_at WHERE updated_at IS NULL');
+  await db.run('UPDATE service_inventory_usage SET quantity = 0 WHERE quantity IS NULL');
+  await db.run('UPDATE service_inventory_usage SET active = 1 WHERE active IS NULL');
+  await db.run('UPDATE service_inventory_usage SET updated_at = created_at WHERE updated_at IS NULL');
+  await db.run("UPDATE inventory_movements SET movement_type = 'adjust' WHERE movement_type IS NULL OR movement_type = ?", ['']);
+  await db.run('UPDATE inventory_movements SET quantity = 0 WHERE quantity IS NULL');
   const defaultTenant = await getDefaultTenant();
   defaultTenantId = defaultTenant?.id || null;
   if (!defaultTenantId) {
@@ -827,6 +907,9 @@ async function initDb() {
   await db.run('UPDATE availability SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE reservations SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE clones SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
+  await db.run('UPDATE inventory_items SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
+  await db.run('UPDATE service_inventory_usage SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
+  await db.run('UPDATE inventory_movements SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run("UPDATE clones SET plan = 'basic' WHERE plan IS NULL");
   await db.run("UPDATE clones SET status = 'draft' WHERE status IS NULL");
   await db.run('UPDATE clones SET active = 1 WHERE active IS NULL');
@@ -834,8 +917,12 @@ async function initDb() {
   await db.run('DELETE FROM tenant_features WHERE tenant_id IS NULL OR tenant_id = ?', ['']);
   await db.run('DELETE FROM tenant_features WHERE feature_key IS NULL OR feature_key = ?', ['']);
   await db.run('UPDATE tenant_features SET updated_at = created_at WHERE updated_at IS NULL');
+  await db.run('DELETE FROM service_inventory_usage WHERE tenant_id IS NULL OR tenant_id = ?', ['']);
+  await db.run('DELETE FROM inventory_items WHERE tenant_id IS NULL OR tenant_id = ?', ['']);
+  await db.run('DELETE FROM inventory_movements WHERE tenant_id IS NULL OR tenant_id = ?', ['']);
 
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenant_features_tenant_feature_key_idx ON tenant_features (tenant_id, feature_key)');
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS service_inventory_usage_unique_idx ON service_inventory_usage (tenant_id, service_id, item_id)');
 
   const cloneRows = await db.all('SELECT id, name, slug, domain, tenant_id FROM clones WHERE active = 1');
   for (const clone of cloneRows) {
@@ -879,14 +966,14 @@ async function seedDefaults() {
   if (serviceCount === 0) {
     const now = nowIso();
     await db.run(
-      'INSERT INTO services (id, tenant_id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [newId(), defaultTenantId, 'Kosmetika', 'cosmetic', 60, now]
+      'INSERT INTO services (id, tenant_id, parent_id, inherits_form, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [newId(), defaultTenantId, null, 0, 'Kosmetika', 'cosmetic', 60, now]
     );
     const items = ['Laminace', 'Prodloužení řas', 'Masáže', 'Depilace', 'EMS a lymfodrenáž', 'Líčení'];
     for (const name of items) {
       await db.run(
-        'INSERT INTO services (id, tenant_id, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [newId(), defaultTenantId, name, 'generic', 60, now]
+        'INSERT INTO services (id, tenant_id, parent_id, inherits_form, name, form_type, duration_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [newId(), defaultTenantId, null, 0, name, 'generic', 60, now]
       );
     }
   }
@@ -1020,73 +1107,131 @@ function sortServicesAsTree(rows) {
   return ordered;
 }
 
-async function getSettings(tenantId) {
-  const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
-  const servicesRaw = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ?', [tenantId]);
-
-  // Dědičnost karty služby přes libovolnou hloubku stromu (služba -> podslužba -> ...).
+function buildServiceFormResolver(rows) {
   const servicesById = new Map();
-  servicesRaw.forEach((row) => {
-    servicesById.set(row.id, row);
+  rows.forEach((row) => {
+    servicesById.set(String(row.id), row);
   });
 
   const effectiveCache = new Map();
-  const resolveEffective = (row, chain = new Set()) => {
-    if (!row) return { form_type: 'generic', form_schema_json: null };
-    if (effectiveCache.has(row.id)) return effectiveCache.get(row.id);
-    if (chain.has(row.id)) {
+  const resolveById = (serviceId, chain = new Set()) => {
+    const key = String(serviceId || '');
+    const row = servicesById.get(key);
+    if (!row) return null;
+    if (effectiveCache.has(key)) return effectiveCache.get(key);
+
+    if (chain.has(key)) {
       const fallback = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
-      effectiveCache.set(row.id, fallback);
+      effectiveCache.set(key, fallback);
       return fallback;
     }
 
-    if (!row.parent_id) {
-      const own = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
-      effectiveCache.set(row.id, own);
-      return own;
+    const hasParent = !!row.parent_id;
+    const inheritsForm = hasParent && toInt(row.inherits_form, 1) === 1;
+
+    if (inheritsForm) {
+      const parent = servicesById.get(String(row.parent_id));
+      if (parent) {
+        const nextChain = new Set(chain);
+        nextChain.add(key);
+        const inherited = resolveById(parent.id, nextChain);
+        const effective = {
+          form_type: inherited?.form_type || row.form_type || 'generic',
+          form_schema_json:
+            inherited?.form_schema_json !== undefined
+              ? inherited.form_schema_json
+              : row.form_schema_json || null
+        };
+        effectiveCache.set(key, effective);
+        return effective;
+      }
     }
 
-    const parent = servicesById.get(row.parent_id);
-    if (!parent) {
-      const own = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
-      effectiveCache.set(row.id, own);
-      return own;
-    }
-
-    const nextChain = new Set(chain);
-    nextChain.add(row.id);
-    const inherited = resolveEffective(parent, nextChain);
-    const effective = {
-      form_type: inherited.form_type || row.form_type || 'generic',
-      form_schema_json:
-        inherited.form_schema_json !== undefined
-          ? inherited.form_schema_json
-          : row.form_schema_json || null
-    };
-    effectiveCache.set(row.id, effective);
-    return effective;
+    const own = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
+    effectiveCache.set(key, own);
+    return own;
   };
 
+  return { servicesById, resolveById };
+}
+
+async function getSettings(tenantId) {
+  const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
+  const servicesRaw = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ?', [tenantId]);
+  const { servicesById, resolveById } = buildServiceFormResolver(servicesRaw);
+
   servicesRaw.forEach((row) => {
-    if (!row.parent_id) {
-      row.inherits_form = 0;
-      row.parent_name = null;
-      return;
-    }
-    const parent = servicesById.get(row.parent_id);
+    const parent = row.parent_id ? servicesById.get(String(row.parent_id)) : null;
     row.parent_name = parent?.name || null;
-    row.inherits_form = parent ? 1 : 0;
-    if (!parent) return;
-    const inherited = resolveEffective(parent);
-    row.form_type = inherited.form_type || row.form_type;
-    row.form_schema_json = inherited.form_schema_json || null;
+    row.inherits_form = row.parent_id ? (toInt(row.inherits_form, 1) === 1 ? 1 : 0) : 0;
+    const effective = resolveById(row.id);
+    if (effective) {
+      row.form_type = effective.form_type || row.form_type || 'generic';
+      row.form_schema_json = effective.form_schema_json || null;
+    }
   });
 
   const services = sortServicesAsTree(servicesRaw);
   const treatments = await db.all('SELECT * FROM treatments WHERE active = 1 ORDER BY name');
   const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
   const workers = await db.all('SELECT id, full_name as name FROM users WHERE active = 1 AND tenant_id = ? ORDER BY full_name', [tenantId]);
-  return { skinTypes, services, treatments, addons, workers };
+  const stockItems = await db.all(
+    'SELECT id, name, unit, price, quantity FROM inventory_items WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    [tenantId]
+  );
+  return { skinTypes, services, treatments, addons, workers, stockItems };
+}
+
+async function getServiceWithEffectiveForm(serviceId, tenantId) {
+  const rows = await db.all(
+    'SELECT id, tenant_id, parent_id, inherits_form, name, price, form_type, form_schema_json FROM services WHERE active = 1 AND tenant_id = ?',
+    [tenantId]
+  );
+  const { servicesById, resolveById } = buildServiceFormResolver(rows);
+  const row = servicesById.get(String(serviceId));
+  if (!row) return null;
+  const effective = resolveById(row.id) || {};
+  return {
+    id: row.id,
+    name: row.name,
+    price: row.price,
+    form_type: effective.form_type || row.form_type || 'generic',
+    form_schema_json: effective.form_schema_json || null
+  };
+}
+
+async function applyServiceInventoryUsage(tenantId, serviceId, visitId) {
+  if (!serviceId) return;
+  const usageRows = await db.all(
+    `SELECT su.item_id, su.quantity, i.quantity as item_quantity
+     FROM service_inventory_usage su
+     JOIN inventory_items i
+       ON i.id = su.item_id
+      AND i.tenant_id = su.tenant_id
+      AND i.active = 1
+     WHERE su.tenant_id = ? AND su.service_id = ? AND su.active = 1`,
+    [tenantId, serviceId]
+  );
+  if (!usageRows.length) return;
+
+  for (const row of usageRows) {
+    const usageQty = roundQty(Math.max(0, toFloat(row.quantity, 0)));
+    if (usageQty <= 0) continue;
+    const currentQty = toFloat(row.item_quantity, 0);
+    const nextQty = roundQty(currentQty - usageQty);
+    await db.run('UPDATE inventory_items SET quantity = ?, updated_at = ? WHERE id = ? AND tenant_id = ?', [
+      nextQty,
+      nowIso(),
+      row.item_id,
+      tenantId
+    ]);
+    await db.run(
+      `INSERT INTO inventory_movements (
+        id, tenant_id, item_id, service_id, visit_id, movement_type, quantity, note, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [newId(), tenantId, row.item_id, serviceId, visitId, 'out', usageQty, 'Automatický odpis ze služby', nowIso()]
+    );
+  }
 }
 
 async function deactivateServiceTree(serviceId, tenantId) {
@@ -1117,13 +1262,15 @@ async function propagateServiceFormToDescendants(serviceId, tenantId, formType, 
     seen.add(current);
 
     const children = await db.all(
-      'SELECT id FROM services WHERE active = 1 AND tenant_id = ? AND parent_id = ?',
+      'SELECT id, inherits_form FROM services WHERE active = 1 AND tenant_id = ? AND parent_id = ?',
       [tenantId, current]
     );
 
     for (const child of children) {
+      const inheritsForm = toInt(child.inherits_form, 1) === 1;
+      if (!inheritsForm) continue;
       await db.run(
-        'UPDATE services SET form_type = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
+        'UPDATE services SET form_type = ?, form_schema_json = ?, inherits_form = 1 WHERE id = ? AND tenant_id = ?',
         [formType, schemaJson, child.id, tenantId]
       );
       queue.push(child.id);
@@ -1806,7 +1953,13 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   const name = (payload.name || '').trim();
   const parentIdRaw = (payload.parent_id || '').toString().trim();
   const parentId = parentIdRaw ? parentIdRaw : null;
-  let formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
+  const hasParent = !!parentId;
+  const formTypeProvided = Object.prototype.hasOwnProperty.call(payload, 'form_type');
+  const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
+  const inheritsForm = hasParent
+    ? (Object.prototype.hasOwnProperty.call(payload, 'inherits_form') ? (truthyValue(payload.inherits_form) ? 1 : 0) : 1)
+    : 0;
+  let formType = formTypeProvided && payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 0);
   const price = Math.max(0, toInt(payload.price, 0));
   if (!name) return res.status(400).json({ error: 'name is required' });
@@ -1815,18 +1968,21 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   }
 
   let schemaJson = null;
-  if (parentId) {
-    const parent = await db.get(
-      'SELECT id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
-      [parentId, req.tenant.id]
-    );
-    if (!parent) {
+  let parentEffective = null;
+  if (hasParent) {
+    parentEffective = await getServiceWithEffectiveForm(parentId, req.tenant.id);
+    if (!parentEffective) {
       return res.status(400).json({ error: 'Rodičovská služba nenalezena.' });
     }
-    formType = parent.form_type || formType;
-    // Podslužby vždy dědí kartu z parent služby. (Ignore payload.form_schema)
-    schemaJson = parent.form_schema_json || null;
-  } else if (Object.prototype.hasOwnProperty.call(payload, 'form_schema')) {
+    if (!formTypeProvided) {
+      formType = parentEffective.form_type || formType;
+    }
+  }
+
+  if (hasParent && inheritsForm === 1 && parentEffective) {
+    formType = parentEffective.form_type || formType;
+    schemaJson = parentEffective.form_schema_json || null;
+  } else if (schemaProvided) {
     if (payload.form_schema === null) {
       schemaJson = null;
     } else {
@@ -1849,8 +2005,8 @@ app.post('/api/services', requireAdmin, async (req, res) => {
 
   const id = newId();
   await db.run(
-    'INSERT INTO services (id, tenant_id, parent_id, name, form_type, duration_minutes, price, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, req.tenant.id, parentId, name, formType, duration, price, schemaJson, nowIso()]
+    'INSERT INTO services (id, tenant_id, parent_id, inherits_form, name, form_type, duration_minutes, price, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, req.tenant.id, parentId, inheritsForm, name, formType, duration, price, schemaJson, nowIso()]
   );
   res.json({ id });
 });
@@ -1858,6 +2014,7 @@ app.post('/api/services', requireAdmin, async (req, res) => {
 app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
+  const formTypeProvided = Object.prototype.hasOwnProperty.call(payload, 'form_type');
   const requestedFormType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
   const duration = toInt(payload.duration_minutes, 0);
   const price = Math.max(0, toInt(payload.price, 0));
@@ -1868,20 +2025,23 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   }
 
   const existing = await db.get(
-    'SELECT id, parent_id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
+    'SELECT id, parent_id, inherits_form, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
     [req.params.id, req.tenant.id]
   );
   if (!existing) return res.status(404).json({ error: 'Služba nenalezena.' });
 
-  let formType = requestedFormType;
+  let formType = formTypeProvided ? requestedFormType : existing.form_type || 'generic';
   let schemaJson = existing.form_schema_json;
+  let inheritsForm = existing.parent_id
+    ? (toInt(existing.inherits_form, 1) === 1 ? 1 : 0)
+    : 0;
 
-  if (existing.parent_id) {
-    // Podslužba: karta + form_type je vždy z parent služby. (Ignore payload.form_schema/form_type)
-    const parent = await db.get(
-      'SELECT id, form_type, form_schema_json FROM services WHERE id = ? AND tenant_id = ? AND active = 1',
-      [existing.parent_id, req.tenant.id]
-    );
+  if (existing.parent_id && Object.prototype.hasOwnProperty.call(payload, 'inherits_form')) {
+    inheritsForm = truthyValue(payload.inherits_form) ? 1 : 0;
+  }
+
+  if (existing.parent_id && inheritsForm === 1) {
+    const parent = await getServiceWithEffectiveForm(existing.parent_id, req.tenant.id);
     if (parent) {
       formType = parent.form_type || formType;
       schemaJson = parent.form_schema_json || null;
@@ -1907,12 +2067,16 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
     }
   }
 
+  if (!existing.parent_id) {
+    inheritsForm = 0;
+  }
+
   await db.run(
-    'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, price = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
-    [name, formType, duration, price, schemaJson, req.params.id, req.tenant.id]
+    'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, price = ?, form_schema_json = ?, inherits_form = ? WHERE id = ? AND tenant_id = ?',
+    [name, formType, duration, price, schemaJson, inheritsForm, req.params.id, req.tenant.id]
   );
 
-  // Karta + form_type se propaguje do celé podstromové větve (všechny úrovně podslužeb).
+  // Karta + form_type se propaguje pouze do podslužeb, které mají zapnuté dědění.
   await propagateServiceFormToDescendants(req.params.id, req.tenant.id, formType, schemaJson);
 
   res.json({ ok: true });
@@ -1920,6 +2084,169 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/services/:id', requireAdmin, async (req, res) => {
   await deactivateServiceTree(req.params.id, req.tenant.id);
+  res.json({ ok: true });
+});
+
+app.get('/api/stock/items', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  const items = await db.all(
+    'SELECT id, name, unit, price, quantity, created_at, updated_at FROM inventory_items WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    [req.tenant.id]
+  );
+  const movements = await db.all(
+    `SELECT m.id, m.item_id, m.service_id, m.visit_id, m.movement_type, m.quantity, m.note, m.created_at,
+            i.name as item_name, i.unit as item_unit, s.name as service_name, v.date as visit_date
+     FROM inventory_movements m
+     LEFT JOIN inventory_items i ON i.id = m.item_id
+     LEFT JOIN services s ON s.id = m.service_id
+     LEFT JOIN visits v ON v.id = m.visit_id
+     WHERE m.tenant_id = ?
+     ORDER BY m.created_at DESC
+     LIMIT 120`,
+    [req.tenant.id]
+  );
+  res.json({ items, movements });
+});
+
+app.post('/api/stock/items', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  const payload = req.body || {};
+  const name = (payload.name || '').trim();
+  const unit = (payload.unit || 'ks').toString().trim() || 'ks';
+  const price = Math.max(0, toInt(payload.price, 0));
+  const quantity = roundQty(Math.max(0, toFloat(payload.quantity, 0)));
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  const id = newId();
+  await db.run(
+    `INSERT INTO inventory_items (id, tenant_id, name, unit, price, quantity, active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    [id, req.tenant.id, name, unit, price, quantity, nowIso(), nowIso()]
+  );
+  if (quantity > 0) {
+    await db.run(
+      `INSERT INTO inventory_movements (id, tenant_id, item_id, movement_type, quantity, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [newId(), req.tenant.id, id, 'in', quantity, 'Počáteční stav položky', nowIso()]
+    );
+  }
+  res.json({ id });
+});
+
+app.put('/api/stock/items/:id', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  const payload = req.body || {};
+  const name = (payload.name || '').trim();
+  const unit = (payload.unit || 'ks').toString().trim() || 'ks';
+  const price = Math.max(0, toInt(payload.price, 0));
+  const quantity = roundQty(Math.max(0, toFloat(payload.quantity, 0)));
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  const existing = await db.get(
+    'SELECT id, quantity FROM inventory_items WHERE id = ? AND tenant_id = ? AND active = 1',
+    [req.params.id, req.tenant.id]
+  );
+  if (!existing) return res.status(404).json({ error: 'Položka skladu nenalezena.' });
+
+  const previousQty = roundQty(Math.max(0, toFloat(existing.quantity, 0)));
+  await db.run(
+    'UPDATE inventory_items SET name = ?, unit = ?, price = ?, quantity = ?, updated_at = ? WHERE id = ? AND tenant_id = ?',
+    [name, unit, price, quantity, nowIso(), req.params.id, req.tenant.id]
+  );
+
+  const delta = roundQty(quantity - previousQty);
+  if (delta !== 0) {
+    await db.run(
+      `INSERT INTO inventory_movements (id, tenant_id, item_id, movement_type, quantity, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [newId(), req.tenant.id, req.params.id, 'adjust', Math.abs(delta), 'Ruční úprava skladu', nowIso()]
+    );
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/stock/items/:id', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  await db.run('UPDATE inventory_items SET active = 0, updated_at = ? WHERE id = ? AND tenant_id = ?', [
+    nowIso(),
+    req.params.id,
+    req.tenant.id
+  ]);
+  await db.run('UPDATE service_inventory_usage SET active = 0, updated_at = ? WHERE item_id = ? AND tenant_id = ?', [
+    nowIso(),
+    req.params.id,
+    req.tenant.id
+  ]);
+  res.json({ ok: true });
+});
+
+app.get('/api/stock/service-usage/:serviceId', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  const service = await db.get('SELECT id FROM services WHERE id = ? AND tenant_id = ? AND active = 1', [
+    req.params.serviceId,
+    req.tenant.id
+  ]);
+  if (!service) return res.status(404).json({ error: 'Služba nenalezena.' });
+
+  const usage = await db.all(
+    `SELECT su.id, su.item_id, su.quantity,
+            i.name as item_name, i.unit as item_unit, i.price as item_price
+     FROM service_inventory_usage su
+     LEFT JOIN inventory_items i
+       ON i.id = su.item_id
+      AND i.tenant_id = su.tenant_id
+      AND i.active = 1
+     WHERE su.tenant_id = ? AND su.service_id = ? AND su.active = 1
+     ORDER BY i.name`,
+    [req.tenant.id, req.params.serviceId]
+  );
+  res.json({ usage });
+});
+
+app.put('/api/stock/service-usage/:serviceId', requireAdmin, requireFeature('inventory'), async (req, res) => {
+  const service = await db.get('SELECT id FROM services WHERE id = ? AND tenant_id = ? AND active = 1', [
+    req.params.serviceId,
+    req.tenant.id
+  ]);
+  if (!service) return res.status(404).json({ error: 'Služba nenalezena.' });
+
+  const payload = req.body || {};
+  const list = Array.isArray(payload.usage) ? payload.usage : [];
+  const seen = new Set();
+  const prepared = [];
+
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue;
+    const itemId = (row.item_id || '').toString().trim();
+    const quantity = roundQty(Math.max(0, toFloat(row.quantity, 0)));
+    if (!itemId || quantity <= 0) continue;
+    if (seen.has(itemId)) continue;
+    seen.add(itemId);
+    prepared.push({ item_id: itemId, quantity });
+  }
+
+  if (prepared.length) {
+    const placeholders = prepared.map(() => '?').join(',');
+    const itemRows = await db.all(
+      `SELECT id FROM inventory_items WHERE active = 1 AND tenant_id = ? AND id IN (${placeholders})`,
+      [req.tenant.id, ...prepared.map((row) => row.item_id)]
+    );
+    if (itemRows.length !== prepared.length) {
+      return res.status(400).json({ error: 'Některé skladové položky neexistují.' });
+    }
+  }
+
+  await db.exec('BEGIN');
+  try {
+    await db.run('DELETE FROM service_inventory_usage WHERE tenant_id = ? AND service_id = ?', [req.tenant.id, req.params.serviceId]);
+    for (const row of prepared) {
+      await db.run(
+        `INSERT INTO service_inventory_usage (id, tenant_id, service_id, item_id, quantity, active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+        [newId(), req.tenant.id, req.params.serviceId, row.item_id, row.quantity, nowIso(), nowIso()]
+      );
+    }
+    await db.exec('COMMIT');
+  } catch (err) {
+    await db.exec('ROLLBACK');
+    throw err;
+  }
+
   res.json({ ok: true });
 });
 
@@ -2503,18 +2830,7 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
   const service = payload.service_id
-    ? await db.get(
-      `SELECT s.id, s.name, s.price,
-              COALESCE(p.form_type, s.form_type) as form_type,
-              COALESCE(p.form_schema_json, s.form_schema_json) as form_schema_json
-       FROM services s
-       LEFT JOIN services p
-         ON p.id = s.parent_id
-        AND p.tenant_id = s.tenant_id
-        AND p.active = 1
-       WHERE s.id = ? AND s.tenant_id = ? AND s.active = 1`,
-      [payload.service_id, req.tenant.id]
-    )
+    ? await getServiceWithEffectiveForm(payload.service_id, req.tenant.id)
     : null;
   if (!service) return res.status(400).json({ error: 'Service is required' });
 
@@ -2578,32 +2894,42 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   } else if (payload.service_data) {
     serviceData = JSON.stringify(payload.service_data);
   }
-  await db.run(
-    `INSERT INTO visits (
-      id, tenant_id, client_id, date, service_id, treatment_id, treatment_price,
-      addons_json, addons_total, manual_total, total, service_data, note,
-      worker_id, payment_method, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ,
-    [
-      id,
-      req.tenant.id,
-      clientId,
-      toDateOnly(payload.date),
-      service.id,
-      treatment ? treatment.id : null,
-      treatmentPrice,
-      addonRows.length ? JSON.stringify(addonRows) : null,
-      addonsTotal,
-      finalTotal,
-      finalTotal,
-      serviceData,
-      payload.note || null,
-      workerId,
-      payload.payment_method || 'cash',
-      nowIso()
-    ]
-  );
+
+  await db.exec('BEGIN');
+  try {
+    await db.run(
+      `INSERT INTO visits (
+        id, tenant_id, client_id, date, service_id, treatment_id, treatment_price,
+        addons_json, addons_total, manual_total, total, service_data, note,
+        worker_id, payment_method, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ,
+      [
+        id,
+        req.tenant.id,
+        clientId,
+        toDateOnly(payload.date),
+        service.id,
+        treatment ? treatment.id : null,
+        treatmentPrice,
+        addonRows.length ? JSON.stringify(addonRows) : null,
+        addonsTotal,
+        finalTotal,
+        finalTotal,
+        serviceData,
+        payload.note || null,
+        workerId,
+        payload.payment_method || 'cash',
+        nowIso()
+      ]
+    );
+
+    await applyServiceInventoryUsage(req.tenant.id, service.id, id);
+    await db.exec('COMMIT');
+  } catch (err) {
+    await db.exec('ROLLBACK');
+    throw err;
+  }
 
   res.json({ id });
 });
@@ -3005,6 +3331,9 @@ app.get('/api/backup', requireSuperAdmin, async (req, res) => {
     clients: await db.all('SELECT * FROM clients'),
     visits: await db.all('SELECT * FROM visits'),
     expenses: await db.all('SELECT * FROM expenses'),
+    inventory_items: await db.all('SELECT * FROM inventory_items'),
+    service_inventory_usage: await db.all('SELECT * FROM service_inventory_usage'),
+    inventory_movements: await db.all('SELECT * FROM inventory_movements'),
     reservations: await db.all('SELECT * FROM reservations'),
     clones: await db.all('SELECT * FROM clones'),
     admin_audit_logs: await db.all('SELECT * FROM admin_audit_logs')
@@ -3024,6 +3353,9 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
   const deleteOrder = [
     'admin_audit_logs',
     'tenant_features',
+    'inventory_movements',
+    'service_inventory_usage',
+    'inventory_items',
     'reservations',
     'availability',
     'visits',
@@ -3051,6 +3383,9 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'clients',
     'visits',
     'expenses',
+    'inventory_items',
+    'service_inventory_usage',
+    'inventory_movements',
     'reservations',
     'clones',
     'admin_audit_logs'

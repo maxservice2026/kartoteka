@@ -37,6 +37,7 @@ const dom = {
   btnAddGeneric: document.getElementById('btnAddGeneric'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
+  btnInventory: document.getElementById('btnInventory'),
   btnCalendar: document.getElementById('btnCalendar'),
   btnBilling: document.getElementById('btnBilling'),
   btnNotifications: document.getElementById('btnNotifications'),
@@ -62,7 +63,8 @@ const state = {
     services: [],
     treatments: [],
     addons: [],
-    workers: []
+    workers: [],
+    stockItems: []
   },
   visits: [],
   users: [],
@@ -95,6 +97,13 @@ const PRO_PREVIEW_MAP = {
     images: [
       { src: '/previews/economy-1.svg', alt: 'Náhled ekonomiky 1', caption: 'Souhrn ekonomiky a grafy' },
       { src: '/previews/economy-2.svg', alt: 'Náhled ekonomiky 2', caption: 'Detail příjmů a výdajů' }
+    ]
+  },
+  inventory: {
+    title: 'Sklad - náhled',
+    description: 'Náhled funkcí PRO verze. V tomto režimu nejde nic upravovat ani odepisovat ze skladu.',
+    images: [
+      { src: '/previews/economy-2.svg', alt: 'Náhled skladu', caption: 'Správa skladových položek a pohybů' }
     ]
   },
   calendar: {
@@ -881,18 +890,29 @@ function updateUserUi() {
   const isReception = state.auth.user?.role === 'reception';
   dom.btnSettings.classList.toggle('hidden', !isAdmin);
   const canEconomy = (isAdmin || isWorker) && isFeatureEnabled('economy');
+  const canInventory = isAdmin && isFeatureEnabled('inventory');
   const canCalendar = !!state.auth.user && isFeatureEnabled('calendar');
   const canBilling = !!state.auth.user && isFeatureEnabled('billing');
   const canNotifications = !!state.auth.user && isFeatureEnabled('notifications');
 
+  if (dom.btnEconomy) dom.btnEconomy.textContent = 'Ekonomika';
+  if (dom.btnInventory) dom.btnInventory.textContent = 'Sklad';
+  if (dom.btnCalendar) dom.btnCalendar.textContent = 'Kalendář';
+  if (dom.btnBilling) dom.btnBilling.textContent = 'Fakturace';
+  if (dom.btnNotifications) dom.btnNotifications.textContent = 'Notifikace';
+
   dom.btnEconomy.classList.toggle('hidden', !canEconomy || isReception);
+  if (dom.btnInventory) {
+    dom.btnInventory.classList.toggle('hidden', !canInventory);
+  }
   dom.btnCalendar.classList.toggle('hidden', !canCalendar);
   dom.btnBilling.classList.toggle('hidden', !canBilling);
   dom.btnNotifications.classList.toggle('hidden', !canNotifications);
   dom.summaryStats.classList.toggle('hidden', !isAdmin);
   dom.btnLogout.classList.toggle('hidden', !state.auth.user);
-  [dom.btnEconomy, dom.btnCalendar, dom.btnBilling, dom.btnNotifications].forEach((button) => {
+  [dom.btnEconomy, dom.btnInventory, dom.btnCalendar, dom.btnBilling, dom.btnNotifications].forEach((button) => {
     if (!button) return;
+    button.classList.remove('pro-button');
     button.classList.remove('pro-locked');
   });
 }
@@ -1114,7 +1134,8 @@ async function loadSettings() {
     services: data.services || [],
     treatments: data.treatments || [],
     addons: data.addons || [],
-    workers: data.workers || []
+    workers: data.workers || [],
+    stockItems: data.stockItems || []
   };
   renderSettingsInputs();
   if (state.selectedClientId) {
@@ -1956,7 +1977,7 @@ async function openEconomyModal() {
         <button class="ghost" id="ecoFilter">Filtrovat</button>
       </div>
       <div class="settings-section">
-        <h3>Přidat výdaj</h3>
+        <h3 class="section-title-with-pill">Přidat výdaj <span class="pro-pill">PRO</span></h3>
         <div class="field-row">
           <div class="field">
             <label>Popis</label>
@@ -1998,7 +2019,8 @@ async function openEconomyModal() {
         </div>
       </div>
       <div class="settings-section">
-        <h3>Příjmy (ošetření)</h3>
+        <h3 class="section-title-with-pill">Přidat příjem <span class="pro-pill">PRO</span></h3>
+        <div class="meta">Příjmy z ošetření</div>
         <div id="ecoVisits"></div>
       </div>
       ${isAdmin
@@ -2567,17 +2589,22 @@ async function openSubserviceDetailModal(service, parentService) {
   };
 
   const rootService = resolveRootService(service);
-  const cardOwner = rootService || parentService || null;
-  const cardOwnerName = cardOwner?.name || 'hlavní služba';
+  const directParent = service.parent_id ? servicesById.get(String(service.parent_id)) || parentService || null : null;
+  const cardOwner = directParent || rootService || parentService || null;
+  const cardOwnerName = cardOwner?.name || 'nadřazená služba';
+  let schemaDraft = normalizeSchemaDraft(parseServiceSchemaJson(service.form_schema_json));
+  const initialInheritForm =
+    Boolean(service.parent_id) &&
+    (service.inherits_form === 1 || service.inherits_form === true || service.inherits_form === '1');
 
   openModal(`
     <div class="modal-header">
       <div>
         <h2>${escapeHtml(service.name || '')}</h2>
-        <div class="meta">Podslužba • karta (formulář) se dědí z hlavní služby: ${escapeHtml(cardOwnerName)}.</div>
+        <div class="meta">Podslužba • může dědit kartu z nadřazené služby (${escapeHtml(cardOwnerName)}) nebo mít vlastní kartu.</div>
       </div>
       <div class="actions-row">
-        ${cardOwner ? `<button class="ghost" id="editParentService">Upravit službu s kartou</button>` : ''}
+        ${cardOwner ? `<button class="ghost" id="editParentService">Upravit nadřazenou službu</button>` : ''}
         <button class="ghost" id="backToSettings">Zpět</button>
         <button class="ghost" id="closeModal">Zavřít</button>
       </div>
@@ -2613,7 +2640,13 @@ async function openSubserviceDetailModal(service, parentService) {
           <input type="checkbox" id="subserviceUseSubservices" />
           Přidat podslužby
         </label>
-        <div class="meta">Podslužby mohou mít další podslužby. Karta služby se vždy dědí z hlavní služby.</div>
+        <div class="meta">Podslužby mohou mít další podslužby. Čas i cena se nastavují na nejnižší úrovni.</div>
+        <div class="divider"></div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="subserviceInheritForm" />
+          Dědit kartu z nadřazené služby
+        </label>
+        <div class="meta">Vypni dědění, pokud chceš pro tuto podslužbu sestavit vlastní kartu.</div>
         <div class="actions-row">
           <button class="primary" id="subserviceSave">Uložit</button>
         </div>
@@ -2628,6 +2661,39 @@ async function openSubserviceDetailModal(service, parentService) {
         <div class="subservice-edit-list" id="subserviceChildrenRows"></div>
         <div class="actions-row services-actions">
           <button type="button" class="ghost" id="subserviceChildrenAdd">+ Přidat podslužbu</button>
+        </div>
+      </div>
+      <div class="settings-section" id="subserviceSchemaSection">
+        <div class="panel-header">
+          <div>
+            <h3>Karta podslužby</h3>
+            <div class="meta">Sestav vlastní formulář. Vpravo vidíš náhled, jak to uvidí uživatel v kartě klientky.</div>
+          </div>
+        </div>
+        <div class="schema-split">
+          <div>
+            <div class="actions-row schema-split-actions">
+              <button type="button" class="ghost" id="subserviceSchemaAddField">Nové pole</button>
+            </div>
+            <div id="subserviceSchemaBuilder" class="schema-builder"></div>
+          </div>
+          <div class="schema-preview">
+            <div class="meta">Náhled karty (jen pro zobrazení).</div>
+            <div id="subserviceSchemaPreviewFields" class="custom-fields"></div>
+            <div class="field-row">
+              <div class="field">
+                <label>Cena z karty (automaticky)</label>
+                <input type="text" value="0 Kč" readonly disabled />
+              </div>
+              <div class="field">
+                <label>Celkem (ručně)</label>
+                <input type="text" placeholder="Finální cena" readonly disabled />
+              </div>
+            </div>
+            <div class="actions-row">
+              <button type="button" class="primary" disabled>Uložit službu</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2648,10 +2714,15 @@ async function openSubserviceDetailModal(service, parentService) {
   const priceInput = document.getElementById('subserviceEditPrice');
   const priceLockedHint = document.getElementById('subservicePriceLockedHint');
   const useSubservicesToggle = document.getElementById('subserviceUseSubservices');
+  const inheritFormToggle = document.getElementById('subserviceInheritForm');
   const childrenSection = document.getElementById('subserviceChildrenSection');
   const childrenMeta = document.getElementById('subserviceChildrenMeta');
   const childrenRows = document.getElementById('subserviceChildrenRows');
   const childrenAddBtn = document.getElementById('subserviceChildrenAdd');
+  const schemaSection = document.getElementById('subserviceSchemaSection');
+  const schemaBuilder = document.getElementById('subserviceSchemaBuilder');
+  const schemaPreview = document.getElementById('subserviceSchemaPreviewFields');
+  const schemaAddFieldBtn = document.getElementById('subserviceSchemaAddField');
 
   nameInput.value = service.name || '';
   durationSelect.value = String(normalizeDurationMinutes(service.duration_minutes, 0));
@@ -2760,14 +2831,60 @@ async function openSubserviceDetailModal(service, parentService) {
 
   setChildrenEnabled(Boolean(useSubservicesToggle?.checked));
 
+  const renderSchemaPreview = () => {
+    if (!schemaPreview) return;
+    renderSchemaFields(schemaPreview, schemaDraft, null);
+    schemaPreview.querySelectorAll('input, textarea, select').forEach((el) => {
+      el.disabled = true;
+    });
+  };
+
+  const onSchemaDraftChange = (force = false) => {
+    if (force) {
+      renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
+    }
+    renderSchemaPreview();
+  };
+
+  const setSchemaInheritanceMode = (inherit) => {
+    if (schemaSection) schemaSection.classList.toggle('hidden', inherit);
+  };
+
+  if (inheritFormToggle) {
+    inheritFormToggle.checked = initialInheritForm;
+    inheritFormToggle.addEventListener('change', () => {
+      setSchemaInheritanceMode(Boolean(inheritFormToggle.checked));
+    });
+  }
+
+  renderSchemaBuilder(schemaBuilder, schemaDraft, onSchemaDraftChange);
+  renderSchemaPreview();
+  setSchemaInheritanceMode(Boolean(inheritFormToggle?.checked));
+
+  if (schemaAddFieldBtn) {
+    schemaAddFieldBtn.addEventListener('click', () => {
+      const nextLabel = `Pole ${schemaDraft.fields.length + 1}`;
+      const baseId = slugifySchemaId(nextLabel) || `pole-${schemaDraft.fields.length + 1}`;
+      const id = ensureUniqueSchemaId(schemaDraft.fields, baseId);
+      schemaDraft.fields = [
+        ...schemaDraft.fields,
+        { id, type: 'text', label: nextLabel, required: false, price_delta: 0, options: [] }
+      ];
+      onSchemaDraftChange(true);
+    });
+  }
+
   document.getElementById('subserviceSave').addEventListener('click', async () => {
     const saveBtn = document.getElementById('subserviceSave');
     if (saveBtn) saveBtn.disabled = true;
     try {
+      const inheritForm = Boolean(inheritFormToggle?.checked);
       const payload = {
         name: nameInput.value.trim(),
         duration_minutes: durationSelect.value,
-        price: priceInput.value
+        price: priceInput.value,
+        form_type: service.form_type || 'generic',
+        inherits_form: inheritForm ? 1 : 0
       };
       if (!payload.name) {
         alert('Vyplň název podslužby.');
@@ -2797,6 +2914,46 @@ async function openSubserviceDetailModal(service, parentService) {
         if (childItems.some((item) => !item.name)) {
           alert('Vyplň název u každé podslužby (nebo ji smaž).');
           return;
+        }
+      }
+
+      if (!inheritForm) {
+        const schemaFields = Array.isArray(schemaDraft.fields) ? schemaDraft.fields : [];
+        if (schemaFields.length) {
+          for (const field of schemaFields) {
+            field.label = (field.label || '').toString().trim();
+            if (!field.label) {
+              alert('Vyplň popis u každého pole v kartě podslužby.');
+              return;
+            }
+            if (!field.id) {
+              field.id = ensureUniqueSchemaId(schemaDraft.fields, slugifySchemaId(field.label));
+            }
+            if (field.type === 'select' || field.type === 'multiselect') {
+              const options = Array.isArray(field.options) ? field.options : [];
+              const filtered = options.filter((opt) => (opt.label || '').toString().trim());
+              if (!filtered.length) {
+                alert(`Pole "${field.label}" musí mít alespoň jednu možnost.`);
+                return;
+              }
+              const used = new Set();
+              filtered.forEach((opt) => {
+                opt.label = (opt.label || '').toString().trim();
+                if (!opt.id) opt.id = slugifySchemaId(opt.label) || randomId('opt');
+                if (used.has(opt.id)) opt.id = randomId('opt');
+                used.add(opt.id);
+                opt.price_delta = Number(opt.price_delta) || 0;
+              });
+              field.options = filtered;
+            } else {
+              field.options = [];
+            }
+            field.required = field.required === true;
+            field.price_delta = field.type === 'checkbox' ? Number(field.price_delta) || 0 : 0;
+          }
+          payload.form_schema = schemaDraft;
+        } else {
+          payload.form_schema = null;
         }
       }
 
