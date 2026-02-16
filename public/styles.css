@@ -902,6 +902,24 @@ button.primary:hover {
   box-shadow: var(--shadow);
 }
 
+.modal.modal-settings {
+  width: min(1360px, 98vw);
+  max-height: 92vh;
+  padding: 24px;
+}
+
+.modal.modal-service-editor {
+  width: min(1500px, 99vw);
+}
+
+.modal.modal-settings .modal-grid {
+  gap: 20px;
+}
+
+.modal.modal-settings .settings-section {
+  padding: 16px;
+}
+
 .modal-header {
   display: flex;
   align-items: center;

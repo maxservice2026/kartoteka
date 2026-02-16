@@ -1638,10 +1638,11 @@ async function addGenericVisit() {
   await loadSummary();
 }
 
-function openModal(contentHtml) {
+function openModal(contentHtml, modalClass = '') {
+  const className = ['modal', modalClass].filter(Boolean).join(' ');
   dom.modalRoot.innerHTML = `
     <div class="modal-backdrop" role="dialog" aria-modal="true">
-      <div class="modal">${contentHtml}</div>
+      <div class="${className}">${contentHtml}</div>
     </div>
   `;
   const backdrop = dom.modalRoot.querySelector('.modal-backdrop');
@@ -2611,7 +2612,7 @@ async function openSubserviceDetailModal(service, parentService) {
         </div>
       </div>
     </div>
-  `);
+  `, 'modal-settings modal-service-editor');
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
   document.getElementById('backToSettings').addEventListener('click', () => {
@@ -2899,7 +2900,7 @@ async function openServiceDetailModal(serviceId) {
         </div>
       </div>
     </div>
-  `);
+  `, 'modal-settings modal-service-editor');
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
   document.getElementById('backToSettings').addEventListener('click', () => {
@@ -3336,7 +3337,7 @@ async function openSettingsModal(initialTab = '') {
     </div>
     ${settingsTabsTemplate(tabs, resolved)}
     <div id="settingsContent"></div>
-  `);
+  `, 'modal-settings');
 
   document.getElementById('closeModal').addEventListener('click', closeModal);
 
