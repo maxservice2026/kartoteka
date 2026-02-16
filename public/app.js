@@ -43,6 +43,7 @@ const dom = {
   btnLogout: document.getElementById('btnLogout'),
   serverStatus: document.getElementById('serverStatus'),
   serverDot: document.getElementById('serverDot'),
+  buildInfo: document.getElementById('buildInfo'),
   userInfo: document.getElementById('userInfo'),
   authRoot: document.getElementById('authRoot'),
   modalRoot: document.getElementById('modalRoot')
@@ -761,12 +762,37 @@ function setServerStatus(online) {
   dom.serverDot.classList.toggle('offline', !online);
 }
 
+function formatBuildDateTime(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString('cs-CZ', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function setBuildInfo(healthData) {
+  if (!dom.buildInfo) return;
+  const version = (healthData?.version || '').toString().trim();
+  const deployedAt = formatBuildDateTime(healthData?.deployed_at);
+  const versionLabel = version ? `ver. ${version}` : 'ver. —';
+  dom.buildInfo.textContent = deployedAt ? `${versionLabel} • ${deployedAt}` : versionLabel;
+}
+
 async function checkServer() {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
     const response = await fetch('/api/health', { signal: controller.signal });
     clearTimeout(timeout);
+    const healthData = response.ok ? await response.json().catch(() => null) : null;
+    if (healthData) {
+      setBuildInfo(healthData);
+    }
     setServerStatus(response.ok);
   } catch (err) {
     setServerStatus(false);

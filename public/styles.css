@@ -120,6 +120,7 @@ body::after {
   gap: 8px;
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -135,6 +136,11 @@ body::after {
 
 .status-dot.offline {
   background: #e04f3a;
+}
+
+.build-info {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .user-info {

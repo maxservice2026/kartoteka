@@ -31,6 +31,8 @@ jobs:
             set -euo pipefail
             cd /srv/kartoteka
             git pull --ff-only
+            export APP_VERSION="$(git rev-parse --short HEAD)"
+            export APP_DEPLOYED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             echo "VPS commit: $(git rev-parse --short HEAD)"
             pm2 restart kartoteka --update-env
             sleep 1

@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execSync } = require('child_process');
 const Database = require('better-sqlite3');
 const { Pool } = require('pg');
 
@@ -18,6 +19,18 @@ const FEATURE_DEFINITIONS = [
   { key: 'notifications', label: 'Notifikace', defaults: { basic: false, pro: true, enterprise: true } }
 ];
 const FEATURE_KEY_SET = new Set(FEATURE_DEFINITIONS.map((feature) => feature.key));
+const APP_STARTED_AT = new Date().toISOString();
+
+function readGitValue(command) {
+  try {
+    return execSync(command, { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+  } catch (err) {
+    return '';
+  }
+}
+
+const APP_VERSION = (process.env.APP_VERSION || readGitValue('git rev-parse --short HEAD') || 'dev').toString().trim();
+const APP_DEPLOYED_AT = (process.env.APP_DEPLOYED_AT || APP_STARTED_AT).toString();
 
 const usePostgres = Boolean(process.env.DATABASE_URL);
 
@@ -1137,7 +1150,13 @@ async function buildCloneTemplateSnapshot(tenantId) {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, db: usePostgres ? 'postgres' : 'sqlite' });
+  res.json({
+    ok: true,
+    db: usePostgres ? 'postgres' : 'sqlite',
+    version: APP_VERSION,
+    deployed_at: APP_DEPLOYED_AT,
+    started_at: APP_STARTED_AT
+  });
 });
 
 app.get('/api/bootstrap', async (req, res) => {
