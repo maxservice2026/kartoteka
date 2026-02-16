@@ -194,6 +194,12 @@ function formatCzk(value) {
   return `${safe.toLocaleString('cs-CZ')} Kč`;
 }
 
+function normalizeDurationMinutes(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return numeric;
+}
+
 const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
 
 function randomId(prefix = 'id') {
@@ -1663,7 +1669,7 @@ function closeModal() {
 }
 
 function durationOptions() {
-  const options = [];
+  const options = [0];
   for (let minutes = 15; minutes <= 360; minutes += 15) {
     options.push(minutes);
   }
@@ -2649,7 +2655,7 @@ async function openSubserviceDetailModal(service, parentService) {
   const childrenAddBtn = document.getElementById('subserviceChildrenAdd');
 
   nameInput.value = service.name || '';
-  durationSelect.value = String(service.duration_minutes || 15);
+  durationSelect.value = String(normalizeDurationMinutes(service.duration_minutes, 0));
   priceInput.value = String(Math.max(0, Number(service.price) || 0));
 
   const removedChildIds = new Set();
@@ -2668,7 +2674,7 @@ async function openSubserviceDetailModal(service, parentService) {
   const childRowTemplate = (row) => {
     const id = row?.id ? String(row.id) : '';
     const name = row?.name || '';
-    const duration = row?.duration_minutes || 15;
+    const duration = normalizeDurationMinutes(row?.duration_minutes, 0);
     const price = Math.max(0, Number(row?.price) || 0);
     return `
       <div class="subservice-edit-item" data-sub-id="${escapeHtml(id)}">
@@ -2708,7 +2714,7 @@ async function openSubserviceDetailModal(service, parentService) {
 
   const addBlankChildRow = () => {
     if (!childrenRows) return;
-    childrenRows.insertAdjacentHTML('beforeend', childRowTemplate({ id: '', name: '', duration_minutes: 15, price: 0 }));
+    childrenRows.insertAdjacentHTML('beforeend', childRowTemplate({ id: '', name: '', duration_minutes: 0, price: 0 }));
     wireChildRowActions();
   };
 
@@ -2774,7 +2780,7 @@ async function openSubserviceDetailModal(service, parentService) {
         ? Array.from(childrenRows?.querySelectorAll('.subservice-edit-item') || []).map((item) => {
             const id = (item.dataset.subId || '').toString().trim();
             const name = (item.querySelector('[data-sub-field="name"]')?.value || '').trim();
-            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '15';
+            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '0';
             const price = (item.querySelector('[data-sub-field="price"]')?.value || '').toString().trim() || '0';
             return { id, name, duration_minutes: duration, price };
           })
@@ -2947,7 +2953,7 @@ async function openServiceDetailModal(serviceId) {
   const priceLockedHint = document.getElementById('servicePriceLockedHint');
   const useSubservicesToggle = document.getElementById('serviceUseSubservices');
   nameInput.value = service.name || '';
-  durationSelect.value = String(service.duration_minutes || 15);
+  durationSelect.value = String(normalizeDurationMinutes(service.duration_minutes, 0));
   priceInput.value = String(Math.max(0, Number(service.price) || 0));
 
   const subSection = document.getElementById('serviceSubservicesSection');
@@ -2969,7 +2975,7 @@ async function openServiceDetailModal(serviceId) {
   const subRowTemplate = (row) => {
     const id = row?.id ? String(row.id) : '';
     const name = row?.name || '';
-    const duration = row?.duration_minutes || 15;
+    const duration = normalizeDurationMinutes(row?.duration_minutes, 0);
     const price = Math.max(0, Number(row?.price) || 0);
     return `
       <div class="subservice-edit-item" data-sub-id="${escapeHtml(id)}">
@@ -3009,7 +3015,7 @@ async function openServiceDetailModal(serviceId) {
 
   const addBlankSubRow = () => {
     if (!subRows) return;
-    subRows.insertAdjacentHTML('beforeend', subRowTemplate({ id: '', name: '', duration_minutes: 15, price: 0 }));
+    subRows.insertAdjacentHTML('beforeend', subRowTemplate({ id: '', name: '', duration_minutes: 0, price: 0 }));
     wireSubRowActions();
   };
 
@@ -3110,7 +3116,7 @@ async function openServiceDetailModal(serviceId) {
         ? Array.from(subRows?.querySelectorAll('.subservice-edit-item') || []).map((item) => {
             const id = (item.dataset.subId || '').toString().trim();
             const name = (item.querySelector('[data-sub-field="name"]')?.value || '').trim();
-            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '15';
+            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '0';
             const price = (item.querySelector('[data-sub-field="price"]')?.value || '').toString().trim() || '0';
             return { id, name, duration_minutes: duration, price };
           })
@@ -3427,7 +3433,7 @@ function renderSettingsLists() {
           ? `karta: ${fieldsCount} polí`
           : 'bez karty';
       const hasChildren = parentIds.has(String(item.id));
-      const durationLabel = hasChildren ? 'podslužby' : `${item.duration_minutes || 15} min`;
+      const durationLabel = hasChildren ? 'podslužby' : `${normalizeDurationMinutes(item.duration_minutes, 0)} min`;
       const priceLabel = hasChildren ? 'cena dle podslužby' : formatCzk(Number(item.price) || 0);
       const indent = Math.max(0, level) * 18;
       return `
@@ -3732,7 +3738,7 @@ function wireServicesSubservices() {
     const nameInput = document.getElementById('subServiceName');
     const durationSelect = document.getElementById('subServiceDuration');
     const name = (nameInput?.value || '').trim();
-    const duration = (durationSelect?.value || '').trim() || '15';
+    const duration = (durationSelect?.value || '').trim() || '0';
     if (!name) {
       alert('Vyplň název podslužby.');
       return;
@@ -3790,7 +3796,7 @@ function refreshServiceSubservicesPanel() {
 
   list.innerHTML = children
     .map((child) => {
-      const durationLabel = `${child.duration_minutes || 15} min`;
+      const durationLabel = `${normalizeDurationMinutes(child.duration_minutes, 0)} min`;
       const priceLabel = formatCzk(Number(child.price) || 0);
       const schema = parseServiceSchemaJson(child.form_schema_json);
       const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;

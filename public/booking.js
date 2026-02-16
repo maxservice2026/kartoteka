@@ -26,6 +26,12 @@ const state = {
   dateMapMonth: null
 };
 
+function normalizeDurationMinutes(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return numeric;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -114,7 +120,7 @@ async function fetchServices() {
           <label class="service-pill" data-service-id="${service.id}" style="margin-left:${indent}px">
             <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
             <span class="service-pill-name">${escapeHtml(service.name)}</span>
-            <span class="service-pill-duration">${Number(service.duration_minutes) || 15} min</span>
+            <span class="service-pill-duration">${normalizeDurationMinutes(service.duration_minutes, 0)} min</span>
           </label>
         `;
       })
@@ -143,7 +149,7 @@ function syncSelectedServices() {
   });
 
   const selected = state.services.filter((service) => state.selectedServiceIds.includes(service.id));
-  const total = selected.reduce((sum, service) => sum + Math.max(15, Number(service.duration_minutes) || 15), 0);
+  const total = selected.reduce((sum, service) => sum + normalizeDurationMinutes(service.duration_minutes, 0), 0);
   state.duration = total;
 
   dom.durationHint.textContent = state.selectedServiceIds.length
@@ -392,7 +398,12 @@ async function loadSlots() {
     return;
   }
   const data = await response.json();
-  state.duration = Number(data.duration) || state.duration || 30;
+  const durationFromApi = Number(data.duration);
+  if (Number.isFinite(durationFromApi) && durationFromApi >= 0) {
+    state.duration = durationFromApi;
+  } else {
+    state.duration = normalizeDurationMinutes(state.duration, 0);
+  }
   state.blockedStarts = new Set(
     (data.blocked_starts || []).map((item) => `${item.worker_id}:${item.time_slot}`)
   );

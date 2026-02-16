@@ -595,7 +595,7 @@ async function initDb() {
       parent_id TEXT,
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
-      duration_minutes INTEGER NOT NULL DEFAULT 30,
+      duration_minutes INTEGER NOT NULL DEFAULT 0,
       price INTEGER NOT NULL DEFAULT 0,
       form_schema_json TEXT,
       active INTEGER NOT NULL DEFAULT 1,
@@ -766,7 +766,7 @@ async function initDb() {
   await ensureColumn('expenses', 'vat_rate', 'INTEGER DEFAULT 0');
   await ensureColumn('expenses', 'worker_id', 'TEXT');
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
-  await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 0');
   await ensureColumn('services', 'price', 'INTEGER DEFAULT 0');
   await ensureColumn('services', 'form_schema_json', 'TEXT');
   await ensureColumn('services', 'parent_id', 'TEXT');
@@ -805,7 +805,7 @@ async function initDb() {
   }
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_tenant_username_idx ON users (tenant_id, username)');
 
-  await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
+  await db.run('UPDATE services SET duration_minutes = 0 WHERE duration_minutes IS NULL');
   await db.run('UPDATE services SET price = 0 WHERE price IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
@@ -1320,10 +1320,10 @@ async function resolveSelectedServices(serviceIds, tenantId) {
   }
 
   const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
-  const duration = serviceIds.reduce(
-    (sum, id) => sum + Math.max(15, toInt(serviceById.get(id)?.duration_minutes, 15)),
-    0
-  );
+  const duration = serviceIds.reduce((sum, id) => sum + Math.max(0, toInt(serviceById.get(id)?.duration_minutes, 0)), 0);
+  if (duration <= 0) {
+    return { error: 'Vybraná služba nemá časovou dotaci pro online rezervaci.', status: 400 };
+  }
   return { serviceRows, serviceById, duration };
 }
 
@@ -1807,11 +1807,11 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   const parentIdRaw = (payload.parent_id || '').toString().trim();
   const parentId = parentIdRaw ? parentIdRaw : null;
   let formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
-  const duration = toInt(payload.duration_minutes, 15);
+  const duration = toInt(payload.duration_minutes, 0);
   const price = Math.max(0, toInt(payload.price, 0));
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (duration < 15 || duration > 360 || duration % 15 !== 0) {
-    return res.status(400).json({ error: 'duration must be between 15 and 360 minutes in 15-minute steps' });
+  if (!(duration === 0 || (duration >= 15 && duration <= 360 && duration % 15 === 0))) {
+    return res.status(400).json({ error: 'duration must be 0 or between 15 and 360 minutes in 15-minute steps' });
   }
 
   let schemaJson = null;
@@ -1859,12 +1859,12 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const requestedFormType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
-  const duration = toInt(payload.duration_minutes, 15);
+  const duration = toInt(payload.duration_minutes, 0);
   const price = Math.max(0, toInt(payload.price, 0));
   const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (duration < 15 || duration > 360 || duration % 15 !== 0) {
-    return res.status(400).json({ error: 'duration must be between 15 and 360 minutes in 15-minute steps' });
+  if (!(duration === 0 || (duration >= 15 && duration <= 360 && duration % 15 === 0))) {
+    return res.status(400).json({ error: 'duration must be 0 or between 15 and 360 minutes in 15-minute steps' });
   }
 
   const existing = await db.get(
