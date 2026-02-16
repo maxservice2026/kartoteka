@@ -2690,9 +2690,6 @@ async function openSubserviceDetailModal(service, parentService) {
                 <input type="text" placeholder="Finální cena" readonly disabled />
               </div>
             </div>
-            <div class="actions-row">
-              <button type="button" class="primary" disabled>Uložit službu</button>
-            </div>
           </div>
         </div>
       </div>
@@ -3087,9 +3084,6 @@ async function openServiceDetailModal(serviceId) {
                 <label>Celkem (ručně)</label>
                 <input type="text" placeholder="Finální cena" readonly disabled />
               </div>
-            </div>
-            <div class="actions-row">
-              <button type="button" class="primary" disabled>Uložit službu</button>
             </div>
           </div>
         </div>
