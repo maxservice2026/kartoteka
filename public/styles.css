@@ -62,9 +62,9 @@ body::after {
 }
 
 .brand-logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  width: 88px;
+  height: 88px;
+  border-radius: 18px;
   object-fit: cover;
   border: 1px solid var(--border);
   background: #fff;
@@ -311,6 +311,47 @@ button.primary:hover {
 }
 
 .service-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.service-dropdown {
+  flex: 0 0 auto;
+}
+
+.service-dropdown[open] {
+  flex-basis: 100%;
+}
+
+.service-dropdown-summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-dropdown-summary::-webkit-details-marker {
+  display: none;
+}
+
+.service-dropdown-summary::after {
+  content: "▾";
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.service-dropdown[open] .service-dropdown-summary::after {
+  content: "▴";
+}
+
+.service-dropdown[open] .service-dropdown-summary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.service-dropdown-children {
+  margin-top: 10px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;

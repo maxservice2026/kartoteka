@@ -1190,17 +1190,19 @@ function renderServiceButtons(autoSelect = false) {
     return list
       .map((service) => {
         const hasChildren = parentIds.has(String(service.id));
-        const indent = Math.max(0, level) * 16;
         if (hasChildren) {
+          const childrenHtml = renderTree(String(service.id), 0);
           return `
-            <div class="service-group" style="margin-left:${indent}px">${escapeHtml(service.name)}</div>
-            <div class="service-group-children">
-              ${renderTree(String(service.id), level + 1)}
-            </div>
+            <details class="service-dropdown" data-parent-id="${service.id}">
+              <summary class="service-button service-dropdown-summary">${escapeHtml(service.name)}</summary>
+              <div class="service-dropdown-children">
+                ${childrenHtml}
+              </div>
+            </details>
           `;
         }
         const active = service.id === state.selectedServiceId ? 'active' : '';
-        return `<button type="button" class="service-button ${active}" data-id="${service.id}" style="margin-left:${indent}px">${escapeHtml(service.name)}</button>`;
+        return `<button type="button" class="service-button ${active}" data-id="${service.id}">${escapeHtml(service.name)}</button>`;
       })
       .join('');
   };
@@ -1208,8 +1210,23 @@ function renderServiceButtons(autoSelect = false) {
   dom.servicePicker.innerHTML = renderTree('', 0);
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
+    if (!button.dataset.id) return;
     button.addEventListener('click', () => selectService(button.dataset.id));
   });
+
+  // Pokud je vybraná podslužba, automaticky otevři její rodičovskou "rozbalovací" službu.
+  if (state.selectedServiceId) {
+    let cursor = services.find((item) => item.id === state.selectedServiceId);
+    const parentsToOpen = [];
+    while (cursor && cursor.parent_id) {
+      parentsToOpen.push(String(cursor.parent_id));
+      cursor = services.find((item) => item.id === String(cursor.parent_id));
+    }
+    parentsToOpen.forEach((parentId) => {
+      const details = dom.servicePicker.querySelector(`details.service-dropdown[data-parent-id="${CSS.escape(parentId)}"]`);
+      if (details) details.open = true;
+    });
+  }
 
   if (autoSelect && !state.selectedServiceId) {
     const findFirstLeaf = (parentKey) => {
