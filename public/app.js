@@ -2255,9 +2255,8 @@ function openBillingModal() {
       <div class="settings-section">
         <h3>Funkce PRO verze</h3>
         <div class="settings-list">
-          <div class="settings-item"><span>Vystavení faktury z návštěvy</span><span>Aktivní v PRO</span></div>
-          <div class="settings-item"><span>Evidování úhrad</span><span>Aktivní v PRO</span></div>
-          <div class="settings-item"><span>Export dokladů</span><span>Aktivní v PRO</span></div>
+          <div class="settings-item"><span>Vystavování faktur klientům z konkrétní návštěvy, odeslání na e-mail</span><span>Aktivní v PRO</span></div>
+          <div class="settings-item"><span>Vystavení faktur pracovníkům salonu</span><span>Aktivní v PRO</span></div>
         </div>
       </div>
     </div>
