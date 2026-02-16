@@ -1224,53 +1224,32 @@ function renderServiceButtons(autoSelect = false) {
     list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
   }
 
-  const collectLeafDescendants = (parentId) => {
-    const list = childrenByParent.get(String(parentId)) || [];
-    const leaves = [];
-    list.forEach((service) => {
-      if (parentIds.has(String(service.id))) {
-        leaves.push(...collectLeafDescendants(service.id));
-      } else {
-        leaves.push(service);
-      }
-    });
-    return leaves;
-  };
-
-  const findTopParentId = (serviceId) => {
-    let cursor = serviceById.get(String(serviceId));
-    let parentId = '';
+  const selectedAncestorIds = new Set();
+  if (state.selectedServiceId) {
+    let cursor = serviceById.get(String(state.selectedServiceId));
     while (cursor && cursor.parent_id) {
-      parentId = String(cursor.parent_id);
+      selectedAncestorIds.add(String(cursor.parent_id));
       cursor = serviceById.get(String(cursor.parent_id));
     }
-    return parentId;
-  };
+  }
 
-  const selectedTopParentId = state.selectedServiceId ? findTopParentId(state.selectedServiceId) : '';
-
-  const renderTree = (parentKey) => {
+  const renderNestedTree = (parentKey) => {
     const list = childrenByParent.get(parentKey) || [];
     return list
       .map((service) => {
+        const id = String(service.id);
         const hasChildren = parentIds.has(String(service.id));
         if (hasChildren) {
-          const leafChildren = collectLeafDescendants(service.id);
-          const childrenHtml = leafChildren
-            .map((child) => {
-              const active = child.id === state.selectedServiceId ? 'active' : '';
-              return `<button type="button" class="service-button service-submenu-option ${active}" data-id="${child.id}">${escapeHtml(child.name)}</button>`;
-            })
-            .join('');
-          const parentActive = selectedTopParentId === String(service.id) ? 'active' : '';
+          const isOpen = selectedAncestorIds.has(id);
+          const parentActive = selectedAncestorIds.has(id) ? 'active' : '';
           return `
-            <div class="service-dropdown-wrap" data-parent-id="${service.id}">
-              <button type="button" class="service-button service-parent-toggle ${parentActive}" data-service-parent-toggle="${service.id}" aria-expanded="false">
+            <div class="service-submenu-node ${isOpen ? 'open' : ''}" data-node-id="${id}">
+              <button type="button" class="service-button service-submenu-parent-toggle ${parentActive}" data-service-sub-toggle="${id}" aria-expanded="${isOpen ? 'true' : 'false'}">
                 <span class="service-dropdown-label">${escapeHtml(service.name)}</span>
-                <span class="service-dropdown-chevron" aria-hidden="true">▾</span>
+                <span class="service-submenu-chevron" aria-hidden="true">▾</span>
               </button>
-              <div class="service-dropdown-children">
-                ${childrenHtml}
+              <div class="service-submenu-nested">
+                ${renderNestedTree(id)}
               </div>
             </div>
           `;
@@ -1281,7 +1260,34 @@ function renderServiceButtons(autoSelect = false) {
       .join('');
   };
 
-  dom.servicePicker.innerHTML = renderTree('');
+  const renderRootTree = () => {
+    const list = childrenByParent.get('') || [];
+    return list
+      .map((service) => {
+        const id = String(service.id);
+        const hasChildren = parentIds.has(id);
+        if (!hasChildren) {
+          const active = service.id === state.selectedServiceId ? 'active' : '';
+          return `<button type="button" class="service-button ${active}" data-id="${service.id}">${escapeHtml(service.name)}</button>`;
+        }
+        const isOpen = selectedAncestorIds.has(id);
+        const parentActive = selectedAncestorIds.has(id) ? 'active' : '';
+        return `
+          <div class="service-dropdown-wrap ${isOpen ? 'open' : ''}" data-parent-id="${id}">
+            <button type="button" class="service-button service-parent-toggle ${parentActive}" data-service-parent-toggle="${id}" aria-expanded="${isOpen ? 'true' : 'false'}">
+              <span class="service-dropdown-label">${escapeHtml(service.name)}</span>
+              <span class="service-dropdown-chevron" aria-hidden="true">▾</span>
+            </button>
+            <div class="service-dropdown-children">
+              ${renderNestedTree(id)}
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+  };
+
+  dom.servicePicker.innerHTML = renderRootTree();
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
     if (button.dataset.serviceParentToggle) {
@@ -1296,6 +1302,18 @@ function renderServiceButtons(autoSelect = false) {
           wrapper.classList.add('open');
           button.setAttribute('aria-expanded', 'true');
         }
+      });
+      return;
+    }
+    if (button.dataset.serviceSubToggle) {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const node = button.closest('.service-submenu-node');
+        if (!node) return;
+        const willOpen = !node.classList.contains('open');
+        node.classList.toggle('open', willOpen);
+        button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
       });
       return;
     }

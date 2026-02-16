@@ -378,6 +378,50 @@ button.primary:hover {
   border-radius: 10px;
 }
 
+.service-submenu-node {
+  display: grid;
+  gap: 4px;
+}
+
+.service-submenu-parent-toggle {
+  width: 100%;
+  text-align: left;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.service-submenu-chevron {
+  font-size: 12px;
+  opacity: 0.75;
+  transition: transform 120ms ease;
+}
+
+.service-submenu-node.open > .service-submenu-parent-toggle .service-submenu-chevron {
+  transform: rotate(180deg);
+}
+
+.service-submenu-parent-toggle.active,
+.service-submenu-parent-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.service-submenu-nested {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px dashed var(--border);
+}
+
+.service-submenu-node.open > .service-submenu-nested {
+  display: flex;
+}
+
 .service-button {
   padding: 8px 12px;
   border-radius: 999px;
