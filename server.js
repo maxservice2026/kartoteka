@@ -596,6 +596,7 @@ async function initDb() {
       name TEXT NOT NULL,
       form_type TEXT NOT NULL,
       duration_minutes INTEGER NOT NULL DEFAULT 30,
+      price INTEGER NOT NULL DEFAULT 0,
       form_schema_json TEXT,
       active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL
@@ -766,6 +767,7 @@ async function initDb() {
   await ensureColumn('expenses', 'worker_id', 'TEXT');
   await ensureColumn('expenses', 'recurring_type', "TEXT DEFAULT 'none'");
   await ensureColumn('services', 'duration_minutes', 'INTEGER DEFAULT 30');
+  await ensureColumn('services', 'price', 'INTEGER DEFAULT 0');
   await ensureColumn('services', 'form_schema_json', 'TEXT');
   await ensureColumn('services', 'parent_id', 'TEXT');
   await ensureColumn('reservations', 'duration_minutes', 'INTEGER DEFAULT 30');
@@ -804,6 +806,7 @@ async function initDb() {
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_tenant_username_idx ON users (tenant_id, username)');
 
   await db.run('UPDATE services SET duration_minutes = 30 WHERE duration_minutes IS NULL');
+  await db.run('UPDATE services SET price = 0 WHERE price IS NULL');
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
   await db.run('UPDATE users SET is_superadmin = 0 WHERE is_superadmin IS NULL');
@@ -1191,7 +1194,7 @@ function normalizeCloneStatus(value) {
 async function buildCloneTemplateSnapshot(tenantId) {
   const targetTenantId = tenantId || defaultTenantId;
   const services = await db.all(
-    'SELECT name, form_type, duration_minutes FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    'SELECT name, form_type, duration_minutes, price FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
     [targetTenantId]
   );
   const skinTypes = await db.all('SELECT name, sort_order FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
@@ -1273,7 +1276,7 @@ app.get('/api/pro-access', (req, res) => {
 
 app.get('/api/public/services', async (req, res) => {
   const services = await db.all(
-    'SELECT id, parent_id, name, duration_minutes FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    'SELECT id, parent_id, name, duration_minutes, price FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
     [req.tenant.id]
   );
   res.json({ services });
@@ -1300,7 +1303,7 @@ async function resolveSelectedServices(serviceIds, tenantId) {
   const placeholders = serviceIds.map(() => '?').join(', ');
   const params = [tenantId, ...serviceIds];
   const serviceRows = await db.all(
-    `SELECT id, name, duration_minutes FROM services WHERE active = 1 AND tenant_id = ? AND id IN (${placeholders})`,
+    `SELECT id, name, duration_minutes, price FROM services WHERE active = 1 AND tenant_id = ? AND id IN (${placeholders})`,
     params
   );
   if (serviceRows.length !== serviceIds.length) {
@@ -1318,7 +1321,7 @@ async function resolveSelectedServices(serviceIds, tenantId) {
 
   const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
   const duration = serviceIds.reduce(
-    (sum, id) => sum + Math.max(30, toInt(serviceById.get(id)?.duration_minutes, 30)),
+    (sum, id) => sum + Math.max(15, toInt(serviceById.get(id)?.duration_minutes, 15)),
     0
   );
   return { serviceRows, serviceById, duration };
@@ -1804,10 +1807,11 @@ app.post('/api/services', requireAdmin, async (req, res) => {
   const parentIdRaw = (payload.parent_id || '').toString().trim();
   const parentId = parentIdRaw ? parentIdRaw : null;
   let formType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
-  const duration = toInt(payload.duration_minutes, 30);
+  const duration = toInt(payload.duration_minutes, 15);
+  const price = Math.max(0, toInt(payload.price, 0));
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (duration < 30 || duration % 30 !== 0) {
-    return res.status(400).json({ error: 'duration must be in 30 minute steps' });
+  if (duration < 15 || duration > 360 || duration % 15 !== 0) {
+    return res.status(400).json({ error: 'duration must be between 15 and 360 minutes in 15-minute steps' });
   }
 
   let schemaJson = null;
@@ -1845,8 +1849,8 @@ app.post('/api/services', requireAdmin, async (req, res) => {
 
   const id = newId();
   await db.run(
-    'INSERT INTO services (id, tenant_id, parent_id, name, form_type, duration_minutes, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, req.tenant.id, parentId, name, formType, duration, schemaJson, nowIso()]
+    'INSERT INTO services (id, tenant_id, parent_id, name, form_type, duration_minutes, price, form_schema_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, req.tenant.id, parentId, name, formType, duration, price, schemaJson, nowIso()]
   );
   res.json({ id });
 });
@@ -1855,11 +1859,12 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   const payload = req.body || {};
   const name = (payload.name || '').trim();
   const requestedFormType = payload.form_type === 'cosmetic' ? 'cosmetic' : 'generic';
-  const duration = toInt(payload.duration_minutes, 30);
+  const duration = toInt(payload.duration_minutes, 15);
+  const price = Math.max(0, toInt(payload.price, 0));
   const schemaProvided = Object.prototype.hasOwnProperty.call(payload, 'form_schema');
   if (!name) return res.status(400).json({ error: 'name is required' });
-  if (duration < 30 || duration % 30 !== 0) {
-    return res.status(400).json({ error: 'duration must be in 30 minute steps' });
+  if (duration < 15 || duration > 360 || duration % 15 !== 0) {
+    return res.status(400).json({ error: 'duration must be between 15 and 360 minutes in 15-minute steps' });
   }
 
   const existing = await db.get(
@@ -1903,8 +1908,8 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
   }
 
   await db.run(
-    'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
-    [name, formType, duration, schemaJson, req.params.id, req.tenant.id]
+    'UPDATE services SET name = ?, form_type = ?, duration_minutes = ?, price = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
+    [name, formType, duration, price, schemaJson, req.params.id, req.tenant.id]
   );
 
   // Karta + form_type se propaguje do celé podstromové větve (všechny úrovně podslužeb).
@@ -2499,7 +2504,7 @@ app.post('/api/clients/:id/visits', async (req, res) => {
 
   const service = payload.service_id
     ? await db.get(
-      `SELECT s.id, s.name,
+      `SELECT s.id, s.name, s.price,
               COALESCE(p.form_type, s.form_type) as form_type,
               COALESCE(p.form_schema_json, s.form_schema_json) as form_schema_json
        FROM services s
@@ -2527,6 +2532,7 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   let addonRows = [];
   let addonsTotal = 0;
   let treatmentPrice = 0;
+  const serviceBasePrice = Math.max(0, toInt(service.price, 0));
   const schema = parseServiceSchemaJson(service.form_schema_json);
   const schemaResult = sanitizeServiceDataBySchema(schema, payload.service_data);
   const schemaExtrasTotal = toInt(schemaResult.extras_total, 0);
@@ -2552,11 +2558,13 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   // Pokud není vyplněná, použijeme cenu z karty (součet příplatků) jako návrh.
   let finalTotal = manualTotal;
   if (finalTotal === null) {
-    if (schemaExtrasTotal > 0) {
-      finalTotal = schemaExtrasTotal;
-    } else if (service.form_type === 'cosmetic') {
+    if (service.form_type === 'cosmetic') {
       const legacyBase = treatmentPrice + addonsTotal;
-      if (legacyBase > 0) finalTotal = legacyBase;
+      const autoTotal = serviceBasePrice + schemaExtrasTotal + legacyBase;
+      if (autoTotal > 0) finalTotal = autoTotal;
+    } else {
+      const autoTotal = serviceBasePrice + schemaExtrasTotal;
+      if (autoTotal > 0) finalTotal = autoTotal;
     }
   }
   if (finalTotal === null) {

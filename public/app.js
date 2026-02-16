@@ -1575,13 +1575,16 @@ async function createClient(selectService = false) {
 }
 
 function updateGenericPricePreview() {
+  const selectedService = state.settings.services.find((item) => item.id === state.selectedServiceId) || null;
+  const serviceBasePrice = Math.max(0, Number(selectedService?.price) || 0);
   const schemaValues = collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema);
   const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
-  dom.genSchemaExtras.value = formatCzk(schemaPrice);
+  const autoPrice = serviceBasePrice + schemaPrice;
+  dom.genSchemaExtras.value = formatCzk(autoPrice);
 
-  // "Celkem (ručně)" je finální cena. Pokud není vyplněná a karta dává cenu, předvyplníme ji.
-  if (dom.genPrice.value === '' && schemaPrice > 0) {
-    dom.genPrice.value = String(schemaPrice);
+  // "Celkem (ručně)" je finální cena. Pokud není vyplněná, předvyplníme automatickou cenu.
+  if (dom.genPrice.value === '' && autoPrice > 0) {
+    dom.genPrice.value = String(autoPrice);
   }
 }
 
@@ -1613,10 +1616,12 @@ async function addGenericVisit() {
   const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
   const schemaData = schemaHasFields ? collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema) : {};
   const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaData);
+  const serviceBasePrice = Math.max(0, Number(service.price) || 0);
+  const autoPrice = serviceBasePrice + schemaPrice;
 
   if (!dom.genPrice.value) {
-    if (schemaPrice > 0) {
-      dom.genPrice.value = String(schemaPrice);
+    if (autoPrice > 0) {
+      dom.genPrice.value = String(autoPrice);
     } else {
       alert('Vyplň cenu služby.');
       return;
@@ -1658,7 +1663,11 @@ function closeModal() {
 }
 
 function durationOptions() {
-  return [30, 60, 90, 120, 150, 180, 210, 240];
+  const options = [];
+  for (let minutes = 15; minutes <= 360; minutes += 15) {
+    options.push(minutes);
+  }
+  return options;
 }
 
 function monthRange() {
@@ -2588,6 +2597,11 @@ async function openSubserviceDetailModal(service, parentService) {
             </select>
             <div class="meta hidden" id="subserviceDurationLockedHint">Délka se nastavuje u podslužeb této položky.</div>
           </div>
+          <div class="field">
+            <label>Cena (Kč)</label>
+            <input id="subserviceEditPrice" type="number" min="0" step="1" />
+            <div class="meta hidden" id="subservicePriceLockedHint">Cena se nastavuje u podslužeb této položky.</div>
+          </div>
         </div>
         <div class="divider"></div>
         <label class="checkbox-row">
@@ -2626,6 +2640,8 @@ async function openSubserviceDetailModal(service, parentService) {
   const nameInput = document.getElementById('subserviceEditName');
   const durationSelect = document.getElementById('subserviceEditDuration');
   const durationLockedHint = document.getElementById('subserviceDurationLockedHint');
+  const priceInput = document.getElementById('subserviceEditPrice');
+  const priceLockedHint = document.getElementById('subservicePriceLockedHint');
   const useSubservicesToggle = document.getElementById('subserviceUseSubservices');
   const childrenSection = document.getElementById('subserviceChildrenSection');
   const childrenMeta = document.getElementById('subserviceChildrenMeta');
@@ -2633,7 +2649,8 @@ async function openSubserviceDetailModal(service, parentService) {
   const childrenAddBtn = document.getElementById('subserviceChildrenAdd');
 
   nameInput.value = service.name || '';
-  durationSelect.value = String(service.duration_minutes || 30);
+  durationSelect.value = String(service.duration_minutes || 15);
+  priceInput.value = String(Math.max(0, Number(service.price) || 0));
 
   const removedChildIds = new Set();
   const getChildren = () => {
@@ -2651,7 +2668,8 @@ async function openSubserviceDetailModal(service, parentService) {
   const childRowTemplate = (row) => {
     const id = row?.id ? String(row.id) : '';
     const name = row?.name || '';
-    const duration = row?.duration_minutes || 30;
+    const duration = row?.duration_minutes || 15;
+    const price = Math.max(0, Number(row?.price) || 0);
     return `
       <div class="subservice-edit-item" data-sub-id="${escapeHtml(id)}">
         <div class="field-row">
@@ -2662,6 +2680,10 @@ async function openSubserviceDetailModal(service, parentService) {
           <div class="field">
             <label>Délka (min)</label>
             <select data-sub-field="duration_minutes">${durationSelectHtml(duration)}</select>
+          </div>
+          <div class="field">
+            <label>Cena (Kč)</label>
+            <input type="number" data-sub-field="price" min="0" step="1" value="${escapeHtml(String(price))}" />
           </div>
         </div>
         <div class="actions-row">
@@ -2686,7 +2708,7 @@ async function openSubserviceDetailModal(service, parentService) {
 
   const addBlankChildRow = () => {
     if (!childrenRows) return;
-    childrenRows.insertAdjacentHTML('beforeend', childRowTemplate({ id: '', name: '', duration_minutes: 30 }));
+    childrenRows.insertAdjacentHTML('beforeend', childRowTemplate({ id: '', name: '', duration_minutes: 15, price: 0 }));
     wireChildRowActions();
   };
 
@@ -2694,7 +2716,9 @@ async function openSubserviceDetailModal(service, parentService) {
     if (!childrenSection) return;
     childrenSection.classList.toggle('hidden', !enabled);
     durationSelect.disabled = enabled;
+    priceInput.disabled = enabled;
     if (durationLockedHint) durationLockedHint.classList.toggle('hidden', !enabled);
+    if (priceLockedHint) priceLockedHint.classList.toggle('hidden', !enabled);
     if (!enabled && childrenRows) {
       childrenRows.innerHTML = '';
     }
@@ -2737,7 +2761,8 @@ async function openSubserviceDetailModal(service, parentService) {
     try {
       const payload = {
         name: nameInput.value.trim(),
-        duration_minutes: durationSelect.value
+        duration_minutes: durationSelect.value,
+        price: priceInput.value
       };
       if (!payload.name) {
         alert('Vyplň název podslužby.');
@@ -2749,8 +2774,9 @@ async function openSubserviceDetailModal(service, parentService) {
         ? Array.from(childrenRows?.querySelectorAll('.subservice-edit-item') || []).map((item) => {
             const id = (item.dataset.subId || '').toString().trim();
             const name = (item.querySelector('[data-sub-field="name"]')?.value || '').trim();
-            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '30';
-            return { id, name, duration_minutes: duration };
+            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '15';
+            const price = (item.querySelector('[data-sub-field="price"]')?.value || '').toString().trim() || '0';
+            return { id, name, duration_minutes: duration, price };
           })
         : [];
 
@@ -2779,12 +2805,14 @@ async function openSubserviceDetailModal(service, parentService) {
           if (child.id) {
             await api.put(`/api/services/${child.id}`, {
               name: child.name,
-              duration_minutes: child.duration_minutes
+              duration_minutes: child.duration_minutes,
+              price: child.price
             });
           } else {
             await api.post('/api/services', {
               name: child.name,
               duration_minutes: child.duration_minutes,
+              price: child.price,
               parent_id: service.id
             });
           }
@@ -2842,6 +2870,11 @@ async function openServiceDetailModal(serviceId) {
             ${durationOptions().map((value) => `<option value="${value}">${value}</option>`).join('')}
           </select>
           <div class="meta hidden" id="serviceDurationLockedHint">Délka se nastavuje u podslužeb.</div>
+        </div>
+        <div class="field">
+          <label>Cena (Kč)</label>
+          <input id="serviceEditPrice" type="number" min="0" step="1" />
+          <div class="meta hidden" id="servicePriceLockedHint">Cena se nastavuje u podslužeb.</div>
         </div>
       </div>
       <div class="divider"></div>
@@ -2910,9 +2943,12 @@ async function openServiceDetailModal(serviceId) {
   const nameInput = document.getElementById('serviceEditName');
   const durationSelect = document.getElementById('serviceEditDuration');
   const durationLockedHint = document.getElementById('serviceDurationLockedHint');
+  const priceInput = document.getElementById('serviceEditPrice');
+  const priceLockedHint = document.getElementById('servicePriceLockedHint');
   const useSubservicesToggle = document.getElementById('serviceUseSubservices');
   nameInput.value = service.name || '';
-  durationSelect.value = String(service.duration_minutes || 30);
+  durationSelect.value = String(service.duration_minutes || 15);
+  priceInput.value = String(Math.max(0, Number(service.price) || 0));
 
   const subSection = document.getElementById('serviceSubservicesSection');
   const subMeta = document.getElementById('serviceSubservicesMeta');
@@ -2933,7 +2969,8 @@ async function openServiceDetailModal(serviceId) {
   const subRowTemplate = (row) => {
     const id = row?.id ? String(row.id) : '';
     const name = row?.name || '';
-    const duration = row?.duration_minutes || 30;
+    const duration = row?.duration_minutes || 15;
+    const price = Math.max(0, Number(row?.price) || 0);
     return `
       <div class="subservice-edit-item" data-sub-id="${escapeHtml(id)}">
         <div class="field-row">
@@ -2944,6 +2981,10 @@ async function openServiceDetailModal(serviceId) {
           <div class="field">
             <label>Délka (min)</label>
             <select data-sub-field="duration_minutes">${durationSelectHtml(duration)}</select>
+          </div>
+          <div class="field">
+            <label>Cena (Kč)</label>
+            <input type="number" data-sub-field="price" min="0" step="1" value="${escapeHtml(String(price))}" />
           </div>
         </div>
         <div class="actions-row">
@@ -2968,7 +3009,7 @@ async function openServiceDetailModal(serviceId) {
 
   const addBlankSubRow = () => {
     if (!subRows) return;
-    subRows.insertAdjacentHTML('beforeend', subRowTemplate({ id: '', name: '', duration_minutes: 30 }));
+    subRows.insertAdjacentHTML('beforeend', subRowTemplate({ id: '', name: '', duration_minutes: 15, price: 0 }));
     wireSubRowActions();
   };
 
@@ -2976,7 +3017,9 @@ async function openServiceDetailModal(serviceId) {
     if (!subSection) return;
     subSection.classList.toggle('hidden', !enabled);
     durationSelect.disabled = enabled;
+    priceInput.disabled = enabled;
     if (durationLockedHint) durationLockedHint.classList.toggle('hidden', !enabled);
+    if (priceLockedHint) priceLockedHint.classList.toggle('hidden', !enabled);
     if (!enabled && subRows) {
       subRows.innerHTML = '';
     }
@@ -3055,6 +3098,7 @@ async function openServiceDetailModal(serviceId) {
       const payload = {
         name: nameInput.value.trim(),
         duration_minutes: durationSelect.value,
+        price: priceInput.value,
         form_type: service.form_type || 'generic'
       };
     if (!payload.name) {
@@ -3066,8 +3110,9 @@ async function openServiceDetailModal(serviceId) {
         ? Array.from(subRows?.querySelectorAll('.subservice-edit-item') || []).map((item) => {
             const id = (item.dataset.subId || '').toString().trim();
             const name = (item.querySelector('[data-sub-field="name"]')?.value || '').trim();
-            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '30';
-            return { id, name, duration_minutes: duration };
+            const duration = (item.querySelector('[data-sub-field="duration_minutes"]')?.value || '').toString().trim() || '15';
+            const price = (item.querySelector('[data-sub-field="price"]')?.value || '').toString().trim() || '0';
+            return { id, name, duration_minutes: duration, price };
           })
         : [];
 
@@ -3136,12 +3181,14 @@ async function openServiceDetailModal(serviceId) {
             await api.put(`/api/services/${sub.id}`, {
               name: sub.name,
               duration_minutes: sub.duration_minutes,
+              price: sub.price,
               form_type: existingChild?.form_type || service.form_type || 'generic'
             });
           } else {
             await api.post('/api/services', {
               name: sub.name,
               duration_minutes: sub.duration_minutes,
+              price: sub.price,
               parent_id: service.id
             });
           }
@@ -3244,6 +3291,7 @@ function servicesSettingsPageTemplate() {
         <div class="field"><label>Délka (min)</label><select data-field="duration_minutes">${durationOptions()
           .map((value) => `<option value="${value}">${value}</option>`)
           .join('')}</select></div>
+        <div class="field"><label>Cena (Kč)</label><input type="number" data-field="price" min="0" step="1" placeholder="0" /></div>
       </div>
       <div class="actions-row services-actions">
         <button class="ghost" data-action="reset">Nový</button>
@@ -3379,13 +3427,14 @@ function renderSettingsLists() {
           ? `karta: ${fieldsCount} polí`
           : 'bez karty';
       const hasChildren = parentIds.has(String(item.id));
-      const durationLabel = hasChildren ? 'podslužby' : `${item.duration_minutes || 30} min`;
+      const durationLabel = hasChildren ? 'podslužby' : `${item.duration_minutes || 15} min`;
+      const priceLabel = hasChildren ? 'cena dle podslužby' : formatCzk(Number(item.price) || 0);
       const indent = Math.max(0, level) * 18;
       return `
         <div class="settings-item service-tree-item${hasChildren ? ' is-parent' : ''}">
           <span class="service-tree-label">
             <span class="service-tree-indent" style="width:${indent}px"></span>
-            <span class="service-tree-name">${escapeHtml(item.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(schemaLabel)}</span>
+            <span class="service-tree-name">${escapeHtml(item.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(priceLabel)} • ${escapeHtml(schemaLabel)}</span>
           </span>
           <div class="settings-actions">
             <button class="ghost" data-action="edit" data-section="services" data-id="${item.id}">Upravit</button>
@@ -3683,7 +3732,7 @@ function wireServicesSubservices() {
     const nameInput = document.getElementById('subServiceName');
     const durationSelect = document.getElementById('subServiceDuration');
     const name = (nameInput?.value || '').trim();
-    const duration = (durationSelect?.value || '').trim() || '30';
+    const duration = (durationSelect?.value || '').trim() || '15';
     if (!name) {
       alert('Vyplň název podslužby.');
       return;
@@ -3741,13 +3790,14 @@ function refreshServiceSubservicesPanel() {
 
   list.innerHTML = children
     .map((child) => {
-      const durationLabel = `${child.duration_minutes || 30} min`;
+      const durationLabel = `${child.duration_minutes || 15} min`;
+      const priceLabel = formatCzk(Number(child.price) || 0);
       const schema = parseServiceSchemaJson(child.form_schema_json);
       const fieldsCount = schema?.fields?.filter((field) => field.type !== 'heading').length || 0;
       const schemaLabel = fieldsCount ? `karta: ${fieldsCount} polí` : 'bez karty';
       return `
         <div class="settings-item">
-          <span>${escapeHtml(child.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(schemaLabel)}</span>
+          <span>${escapeHtml(child.name)} • ${escapeHtml(durationLabel)} • ${escapeHtml(priceLabel)} • ${escapeHtml(schemaLabel)}</span>
           <div class="settings-actions">
             <button class="ghost" data-action="edit" data-id="${child.id}">Upravit</button>
             <button class="ghost" data-action="delete" data-id="${child.id}">Smazat</button>

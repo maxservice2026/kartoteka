@@ -114,7 +114,7 @@ async function fetchServices() {
           <label class="service-pill" data-service-id="${service.id}" style="margin-left:${indent}px">
             <input type="checkbox" class="public-service-checkbox" value="${service.id}" />
             <span class="service-pill-name">${escapeHtml(service.name)}</span>
-            <span class="service-pill-duration">${Number(service.duration_minutes) || 30} min</span>
+            <span class="service-pill-duration">${Number(service.duration_minutes) || 15} min</span>
           </label>
         `;
       })
@@ -143,7 +143,7 @@ function syncSelectedServices() {
   });
 
   const selected = state.services.filter((service) => state.selectedServiceIds.includes(service.id));
-  const total = selected.reduce((sum, service) => sum + Math.max(30, Number(service.duration_minutes) || 30), 0);
+  const total = selected.reduce((sum, service) => sum + Math.max(15, Number(service.duration_minutes) || 15), 0);
   state.duration = total;
 
   dom.durationHint.textContent = state.selectedServiceIds.length
