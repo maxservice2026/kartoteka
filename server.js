@@ -1020,12 +1020,50 @@ function sortServicesAsTree(rows) {
 async function getSettings(tenantId) {
   const skinTypes = await db.all('SELECT * FROM skin_types WHERE active = 1 ORDER BY sort_order, name');
   const servicesRaw = await db.all('SELECT * FROM services WHERE active = 1 AND tenant_id = ?', [tenantId]);
-  // Podslužby dědí kartu a form_type z hlavní služby (parent).
-  // Neřešíme zatím víc než 1 úroveň stromu (parent -> child), ale je to připravené bezpečně.
+
+  // Dědičnost karty služby přes libovolnou hloubku stromu (služba -> podslužba -> ...).
   const servicesById = new Map();
   servicesRaw.forEach((row) => {
     servicesById.set(row.id, row);
   });
+
+  const effectiveCache = new Map();
+  const resolveEffective = (row, chain = new Set()) => {
+    if (!row) return { form_type: 'generic', form_schema_json: null };
+    if (effectiveCache.has(row.id)) return effectiveCache.get(row.id);
+    if (chain.has(row.id)) {
+      const fallback = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
+      effectiveCache.set(row.id, fallback);
+      return fallback;
+    }
+
+    if (!row.parent_id) {
+      const own = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
+      effectiveCache.set(row.id, own);
+      return own;
+    }
+
+    const parent = servicesById.get(row.parent_id);
+    if (!parent) {
+      const own = { form_type: row.form_type || 'generic', form_schema_json: row.form_schema_json || null };
+      effectiveCache.set(row.id, own);
+      return own;
+    }
+
+    const nextChain = new Set(chain);
+    nextChain.add(row.id);
+    const inherited = resolveEffective(parent, nextChain);
+    const effective = {
+      form_type: inherited.form_type || row.form_type || 'generic',
+      form_schema_json:
+        inherited.form_schema_json !== undefined
+          ? inherited.form_schema_json
+          : row.form_schema_json || null
+    };
+    effectiveCache.set(row.id, effective);
+    return effective;
+  };
+
   servicesRaw.forEach((row) => {
     if (!row.parent_id) {
       row.inherits_form = 0;
@@ -1033,16 +1071,14 @@ async function getSettings(tenantId) {
       return;
     }
     const parent = servicesById.get(row.parent_id);
-    if (!parent) {
-      row.inherits_form = 0;
-      row.parent_name = null;
-      return;
-    }
-    row.parent_name = parent.name || null;
-    row.inherits_form = 1;
-    row.form_type = parent.form_type || row.form_type;
-    row.form_schema_json = parent.form_schema_json || null;
+    row.parent_name = parent?.name || null;
+    row.inherits_form = parent ? 1 : 0;
+    if (!parent) return;
+    const inherited = resolveEffective(parent);
+    row.form_type = inherited.form_type || row.form_type;
+    row.form_schema_json = inherited.form_schema_json || null;
   });
+
   const services = sortServicesAsTree(servicesRaw);
   const treatments = await db.all('SELECT * FROM treatments WHERE active = 1 ORDER BY name');
   const addons = await db.all('SELECT * FROM addons WHERE active = 1 ORDER BY name');
@@ -1065,6 +1101,30 @@ async function deactivateServiceTree(serviceId, tenantId) {
       [tenantId, current]
     );
     children.forEach((row) => queue.push(row.id));
+  }
+}
+
+async function propagateServiceFormToDescendants(serviceId, tenantId, formType, schemaJson) {
+  const queue = [serviceId];
+  const seen = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+
+    const children = await db.all(
+      'SELECT id FROM services WHERE active = 1 AND tenant_id = ? AND parent_id = ?',
+      [tenantId, current]
+    );
+
+    for (const child of children) {
+      await db.run(
+        'UPDATE services SET form_type = ?, form_schema_json = ? WHERE id = ? AND tenant_id = ?',
+        [formType, schemaJson, child.id, tenantId]
+      );
+      queue.push(child.id);
+    }
   }
 }
 
@@ -1847,13 +1907,8 @@ app.put('/api/services/:id', requireAdmin, async (req, res) => {
     [name, formType, duration, schemaJson, req.params.id, req.tenant.id]
   );
 
-  if (!existing.parent_id) {
-    // Hlavní služba: karta + form_type platí i pro všechny podslužby.
-    await db.run(
-      'UPDATE services SET form_type = ?, form_schema_json = ? WHERE parent_id = ? AND tenant_id = ? AND active = 1',
-      [formType, schemaJson, req.params.id, req.tenant.id]
-    );
-  }
+  // Karta + form_type se propaguje do celé podstromové větve (všechny úrovně podslužeb).
+  await propagateServiceFormToDescendants(req.params.id, req.tenant.id, formType, schemaJson);
 
   res.json({ ok: true });
 });
