@@ -2820,7 +2820,7 @@ async function openSubserviceDetailModal(service, parentService) {
       }
 
       await loadSettings();
-      closeModal();
+      await openSettingsModal('services');
     } finally {
       if (saveBtn) saveBtn.disabled = false;
     }
@@ -3196,7 +3196,7 @@ async function openServiceDetailModal(serviceId) {
       }
 
       await loadSettings();
-      closeModal();
+      await openSettingsModal('services');
     } finally {
       if (saveBtn) saveBtn.disabled = false;
     }
