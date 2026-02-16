@@ -1156,6 +1156,17 @@ function applyDefaultWorker(selectEl) {
   }
 }
 
+function closeAllServiceParentMenus() {
+  if (!dom.servicePicker) return;
+  dom.servicePicker.querySelectorAll('.service-dropdown-wrap.open').forEach((wrapper) => {
+    wrapper.classList.remove('open');
+    const toggle = wrapper.querySelector('[data-service-parent-toggle]');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
 function renderServiceButtons(autoSelect = false) {
   if (!dom.servicePicker) return;
   if (!state.settings.services.length) {
@@ -1176,7 +1187,9 @@ function renderServiceButtons(autoSelect = false) {
 
   const collator = new Intl.Collator('cs', { sensitivity: 'base' });
   const childrenByParent = new Map();
+  const serviceById = new Map();
   services.forEach((service) => {
+    serviceById.set(String(service.id), service);
     const key = service.parent_id ? String(service.parent_id) : '';
     if (!childrenByParent.has(key)) childrenByParent.set(key, []);
     childrenByParent.get(key).push(service);
@@ -1185,23 +1198,55 @@ function renderServiceButtons(autoSelect = false) {
     list.sort((a, b) => collator.compare(a.name || '', b.name || ''));
   }
 
-  const renderTree = (parentKey, level) => {
+  const collectLeafDescendants = (parentId) => {
+    const list = childrenByParent.get(String(parentId)) || [];
+    const leaves = [];
+    list.forEach((service) => {
+      if (parentIds.has(String(service.id))) {
+        leaves.push(...collectLeafDescendants(service.id));
+      } else {
+        leaves.push(service);
+      }
+    });
+    return leaves;
+  };
+
+  const findTopParentId = (serviceId) => {
+    let cursor = serviceById.get(String(serviceId));
+    let parentId = '';
+    while (cursor && cursor.parent_id) {
+      parentId = String(cursor.parent_id);
+      cursor = serviceById.get(String(cursor.parent_id));
+    }
+    return parentId;
+  };
+
+  const selectedTopParentId = state.selectedServiceId ? findTopParentId(state.selectedServiceId) : '';
+
+  const renderTree = (parentKey) => {
     const list = childrenByParent.get(parentKey) || [];
     return list
       .map((service) => {
         const hasChildren = parentIds.has(String(service.id));
         if (hasChildren) {
-          const childrenHtml = renderTree(String(service.id), 0);
+          const leafChildren = collectLeafDescendants(service.id);
+          const childrenHtml = leafChildren
+            .map((child) => {
+              const active = child.id === state.selectedServiceId ? 'active' : '';
+              return `<button type="button" class="service-button service-submenu-option ${active}" data-id="${child.id}">${escapeHtml(child.name)}</button>`;
+            })
+            .join('');
+          const parentActive = selectedTopParentId === String(service.id) ? 'active' : '';
           return `
-            <details class="service-dropdown" data-parent-id="${service.id}">
-              <summary class="service-dropdown-summary">
+            <div class="service-dropdown-wrap" data-parent-id="${service.id}">
+              <button type="button" class="service-button service-parent-toggle ${parentActive}" data-service-parent-toggle="${service.id}" aria-expanded="false">
                 <span class="service-dropdown-label">${escapeHtml(service.name)}</span>
                 <span class="service-dropdown-chevron" aria-hidden="true">▾</span>
-              </summary>
+              </button>
               <div class="service-dropdown-children">
                 ${childrenHtml}
               </div>
-            </details>
+            </div>
           `;
         }
         const active = service.id === state.selectedServiceId ? 'active' : '';
@@ -1210,26 +1255,31 @@ function renderServiceButtons(autoSelect = false) {
       .join('');
   };
 
-  dom.servicePicker.innerHTML = renderTree('', 0);
+  dom.servicePicker.innerHTML = renderTree('');
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
-    if (!button.dataset.id) return;
-    button.addEventListener('click', () => selectService(button.dataset.id));
-  });
-
-  // Pokud je vybraná podslužba, automaticky otevři její rodičovskou "rozbalovací" službu.
-  if (state.selectedServiceId) {
-    let cursor = services.find((item) => item.id === state.selectedServiceId);
-    const parentsToOpen = [];
-    while (cursor && cursor.parent_id) {
-      parentsToOpen.push(String(cursor.parent_id));
-      cursor = services.find((item) => item.id === String(cursor.parent_id));
+    if (button.dataset.serviceParentToggle) {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const wrapper = button.closest('.service-dropdown-wrap');
+        if (!wrapper) return;
+        const willOpen = !wrapper.classList.contains('open');
+        closeAllServiceParentMenus();
+        if (willOpen) {
+          wrapper.classList.add('open');
+          button.setAttribute('aria-expanded', 'true');
+        }
+      });
+      return;
     }
-    parentsToOpen.forEach((parentId) => {
-      const details = dom.servicePicker.querySelector(`details.service-dropdown[data-parent-id="${CSS.escape(parentId)}"]`);
-      if (details) details.open = true;
+    if (!button.dataset.id) return;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectService(button.dataset.id);
+      closeAllServiceParentMenus();
     });
-  }
+  });
 
   if (autoSelect && !state.selectedServiceId) {
     const findFirstLeaf = (parentKey) => {
@@ -3614,6 +3664,12 @@ function wireEvents() {
   }
   dom.btnLogout.addEventListener('click', handleLogout);
   dom.genPrice.addEventListener('input', updateGenericPricePreview);
+  document.addEventListener('click', (event) => {
+    if (!dom.servicePicker) return;
+    if (!dom.servicePicker.contains(event.target)) {
+      closeAllServiceParentMenus();
+    }
+  });
 }
 
 async function init() {
