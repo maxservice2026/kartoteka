@@ -329,20 +329,27 @@ button.primary:hover {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
 }
 
 .service-dropdown-summary::-webkit-details-marker {
   display: none;
 }
 
-.service-dropdown-summary::after {
-  content: "▾";
+.service-dropdown-chevron {
   font-size: 12px;
   opacity: 0.75;
+  transition: transform 120ms ease;
 }
 
-.service-dropdown[open] .service-dropdown-summary::after {
-  content: "▴";
+.service-dropdown[open] .service-dropdown-chevron {
+  transform: rotate(180deg);
 }
 
 .service-dropdown[open] .service-dropdown-summary {

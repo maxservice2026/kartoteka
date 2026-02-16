@@ -1194,7 +1194,10 @@ function renderServiceButtons(autoSelect = false) {
           const childrenHtml = renderTree(String(service.id), 0);
           return `
             <details class="service-dropdown" data-parent-id="${service.id}">
-              <summary class="service-button service-dropdown-summary">${escapeHtml(service.name)}</summary>
+              <summary class="service-dropdown-summary">
+                <span class="service-dropdown-label">${escapeHtml(service.name)}</span>
+                <span class="service-dropdown-chevron" aria-hidden="true">▾</span>
+              </summary>
               <div class="service-dropdown-children">
                 ${childrenHtml}
               </div>
