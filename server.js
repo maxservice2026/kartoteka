@@ -263,7 +263,16 @@ function normalizeServiceSchema(rawSchema) {
         const optionId = (rawOption.id || '').toString().trim();
         const optionLabel = (rawOption.label || '').toString().trim();
         if (!optionId || !optionLabel) continue;
-        options.push({ id: optionId, label: optionLabel, price_delta: toInt(rawOption.price_delta, 0) });
+        let durationMinutes = toInt(rawOption.duration_minutes, 0);
+        if (!(durationMinutes === 0 || (durationMinutes >= 15 && durationMinutes <= 360 && durationMinutes % 15 === 0))) {
+          durationMinutes = 0;
+        }
+        options.push({
+          id: optionId,
+          label: optionLabel,
+          price_delta: toInt(rawOption.price_delta, 0),
+          duration_minutes: durationMinutes
+        });
       }
       field.options = options;
     }

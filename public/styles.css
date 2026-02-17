@@ -744,7 +744,7 @@ button.primary:hover {
 
 .schema-option-row {
   display: grid;
-  grid-template-columns: 1fr 140px auto;
+  grid-template-columns: 1fr 140px 140px auto;
   gap: 10px;
   align-items: end;
 }
@@ -895,6 +895,30 @@ button.primary:hover {
 .eco-trend-months {
   font-size: 12px;
   color: var(--muted);
+}
+
+.eco-day-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.eco-day-header {
+  background: #f4f7ff;
+}
+
+.eco-worker-header {
+  margin-left: 10px;
+  font-weight: 600;
+}
+
+.eco-visit-item {
+  margin-left: 22px;
+  background: #f9f7f3;
 }
 
 .history {

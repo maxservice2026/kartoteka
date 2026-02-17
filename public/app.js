@@ -330,6 +330,16 @@ function formatSignedCzk(value) {
   return numeric < 0 ? `-${formatted}` : formatted;
 }
 
+function formatOptionLabel(option) {
+  const bits = [];
+  const price = formatSignedCzk(option?.price_delta);
+  if (price) bits.push(price);
+  const duration = Number(option?.duration_minutes) || 0;
+  if (duration > 0) bits.push(`${duration} min`);
+  const label = option?.label || '';
+  return bits.length ? `${label} (${bits.join(' • ')})` : label;
+}
+
 function renderSchemaFields(container, schema, onChange, initialValues = {}) {
   if (!container) return;
   container.innerHTML = '';
@@ -379,8 +389,7 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
         const item = document.createElement('label');
         item.className = 'addon-item';
         const left = document.createElement('span');
-        const price = formatSignedCzk(opt.price_delta);
-        const optionText = price ? `${opt.label} (${price})` : opt.label;
+        const optionText = formatOptionLabel(opt);
         left.textContent = optionText;
         if ((optionText || '').length > 35) {
           item.classList.add('addon-item-long');
@@ -429,8 +438,7 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
       (field.options || []).forEach((opt) => {
         const option = document.createElement('option');
         option.value = opt.id;
-        const price = formatSignedCzk(opt.price_delta);
-        option.textContent = price ? `${opt.label} (${price})` : opt.label;
+        option.textContent = formatOptionLabel(opt);
         select.appendChild(option);
       });
       select.addEventListener('change', () => onChange && onChange());
@@ -516,7 +524,8 @@ function normalizeSchemaDraft(schema) {
       options: Array.isArray(field.options) ? field.options.map((opt) => ({
         id: (opt.id || '').toString().trim(),
         label: (opt.label || '').toString().trim(),
-        price_delta: Number(opt.price_delta) || 0
+        price_delta: Number(opt.price_delta) || 0,
+        duration_minutes: Number(opt.duration_minutes) || 0
       })) : []
     }))
   };
@@ -579,8 +588,8 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
       if (field.type === 'select' || field.type === 'multiselect') {
         if (!Array.isArray(field.options) || !field.options.length) {
           field.options = [
-            { id: 'a', label: 'Možnost A', price_delta: 0 },
-            { id: 'b', label: 'Možnost B', price_delta: 0 }
+            { id: 'a', label: 'Možnost A', price_delta: 0, duration_minutes: 0 },
+            { id: 'b', label: 'Možnost B', price_delta: 0, duration_minutes: 0 }
           ];
         }
       } else {
@@ -680,6 +689,22 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
         optPriceWrap.appendChild(optPriceLabel);
         optPriceWrap.appendChild(optPriceInput);
 
+        const optDurationWrap = document.createElement('div');
+        optDurationWrap.className = 'field';
+        const optDurationLabel = document.createElement('label');
+        optDurationLabel.textContent = 'Čas (min)';
+        const optDurationSelect = document.createElement('select');
+        optDurationSelect.innerHTML = durationOptions()
+          .map((value) => `<option value="${value}">${value}</option>`)
+          .join('');
+        optDurationSelect.value = String(Number(opt.duration_minutes) || 0);
+        optDurationSelect.addEventListener('change', () => {
+          opt.duration_minutes = Number(optDurationSelect.value) || 0;
+          onChange && onChange();
+        });
+        optDurationWrap.appendChild(optDurationLabel);
+        optDurationWrap.appendChild(optDurationSelect);
+
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
         delBtn.className = 'ghost';
@@ -691,6 +716,7 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
 
         row.appendChild(optLabelWrap);
         row.appendChild(optPriceWrap);
+        row.appendChild(optDurationWrap);
         row.appendChild(delBtn);
         optionsWrap.appendChild(row);
       });
@@ -702,7 +728,7 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
       addOptionBtn.addEventListener('click', () => {
         const nextLabel = `Možnost ${String.fromCharCode(65 + (field.options || []).length)}`;
         const nextId = ensureUniqueSchemaId(field.options || [], slugifySchemaId(nextLabel) || 'opt');
-        field.options = [...(field.options || []), { id: nextId, label: nextLabel, price_delta: 0 }];
+        field.options = [...(field.options || []), { id: nextId, label: nextLabel, price_delta: 0, duration_minutes: 0 }];
         onChange && onChange(true);
       });
       optionsWrap.appendChild(addOptionBtn);
@@ -2131,10 +2157,11 @@ function buildCalendarHtml(year, month, reservations) {
 async function openCalendarModal() {
   const now = new Date();
   const year = now.getFullYear();
-  const month = 1; // únor (demo)
+  const month = now.getMonth();
+  const monthNumber = month + 1;
   let reservations = new Set();
   try {
-    const data = await api.get(`/api/reservations/calendar?year=${year}&month=${month + 1}`);
+    const data = await api.get(`/api/reservations/calendar?year=${year}&month=${monthNumber}`);
     reservations = new Set(data.days || []);
   } catch (err) {
     reservations = sampleReservationsForMonth(year, month);
@@ -2163,17 +2190,78 @@ async function openCalendarModal() {
     )
     .join('');
 
+  let publicServices = [];
+  try {
+    const data = await api.get('/api/public/services');
+    publicServices = Array.isArray(data.services) ? data.services : [];
+  } catch (err) {
+    publicServices = [];
+  }
+  const parentIds = new Set(publicServices.filter((service) => service.parent_id).map((service) => String(service.parent_id)));
+  const leafServices = publicServices
+    .filter((service) => !parentIds.has(String(service.id)))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'));
+  const bookingServiceOptions = [
+    '<option value="">Vyber službu</option>',
+    ...leafServices.map(
+      (service) =>
+        `<option value="${service.id}">${service.name} • ${normalizeDurationMinutes(service.duration_minutes, 0)} min</option>`
+    )
+  ].join('');
+
   openModal(`
     <div class="modal-header">
       <div>
         <h2>Kalendář</h2>
-        <div class="meta">Rezervace pro únor ${year}</div>
+        <div class="meta">Rezervace pro ${monthName(month)} ${year}</div>
       </div>
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
       ${buildCalendarHtml(year, month, reservations)}
       <div class="hint">Modrá tečka značí den s rezervací.</div>
+
+      <div class="settings-section">
+        <h3>Nová rezervace</h3>
+        <div class="meta">Nejprve vyber službu, pak den a čas.</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Služba</label>
+            <select id="calendarBookingService">${bookingServiceOptions}</select>
+          </div>
+          <div class="field">
+            <label>Vybraný termín</label>
+            <input type="text" id="calendarBookingPicked" value="" placeholder="Zatím nevybráno" readonly />
+          </div>
+        </div>
+        <div id="calendarBookingDateMap" class="date-availability hidden"></div>
+        <div id="calendarBookingSlots" class="slot-grid"></div>
+        <div id="calendarBookingSlotsHint" class="hint">Vyber službu.</div>
+        <div class="field-row">
+          <div class="field">
+            <label>Jméno klientky</label>
+            <input type="text" id="calendarBookingName" placeholder="Např. Jana Nováková" />
+          </div>
+          <div class="field">
+            <label>Telefon</label>
+            <input type="text" id="calendarBookingPhone" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label>E-mail</label>
+            <input type="email" id="calendarBookingEmail" />
+          </div>
+          <div class="field">
+            <label>Poznámka</label>
+            <input type="text" id="calendarBookingNote" />
+          </div>
+        </div>
+        <div class="actions-row">
+          <button class="primary" id="calendarBookingSave" disabled>Uložit rezervaci</button>
+        </div>
+      </div>
+
       <div class="settings-section">
         <h3>Rezervace v měsíci</h3>
         <div id="calendarReservations" class="settings-list"></div>
@@ -2200,7 +2288,7 @@ async function openCalendarModal() {
 
   let monthReservations = [];
   try {
-    const data = await api.get(`/api/reservations?year=${year}&month=${month + 1}`);
+    const data = await api.get(`/api/reservations?year=${year}&month=${monthNumber}`);
     monthReservations = data.reservations || [];
   } catch (err) {
     monthReservations = [];
@@ -2244,6 +2332,241 @@ async function openCalendarModal() {
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       renderReservationList(dateKey);
     });
+  });
+
+  const bookingState = {
+    serviceId: '',
+    selectedDate: '',
+    selectedSlot: null,
+    mapYear: year,
+    mapMonth: monthNumber
+  };
+  const bookingServiceSelect = document.getElementById('calendarBookingService');
+  const bookingDateMap = document.getElementById('calendarBookingDateMap');
+  const bookingSlots = document.getElementById('calendarBookingSlots');
+  const bookingSlotsHint = document.getElementById('calendarBookingSlotsHint');
+  const bookingPicked = document.getElementById('calendarBookingPicked');
+  const bookingSave = document.getElementById('calendarBookingSave');
+  const bookingName = document.getElementById('calendarBookingName');
+  const bookingPhone = document.getElementById('calendarBookingPhone');
+  const bookingEmail = document.getElementById('calendarBookingEmail');
+  const bookingNote = document.getElementById('calendarBookingNote');
+
+  const displayDate = (isoDate) => {
+    const [yy, mm, dd] = String(isoDate || '').split('-');
+    if (!yy || !mm || !dd) return '';
+    return `${dd}.${mm}.${yy}`;
+  };
+
+  const updatePickedLabel = () => {
+    if (!bookingState.selectedDate || !bookingState.selectedSlot) {
+      bookingPicked.value = '';
+      return;
+    }
+    bookingPicked.value =
+      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}`;
+  };
+
+  const updateBookingSaveState = () => {
+    bookingSave.disabled = !(
+      bookingState.serviceId &&
+      bookingState.selectedDate &&
+      bookingState.selectedSlot &&
+      bookingName.value.trim()
+    );
+  };
+
+  const renderBookingSlots = (slots, hintText = '') => {
+    bookingSlots.innerHTML = '';
+    const available = Array.isArray(slots) ? slots : [];
+    if (!available.length) {
+      bookingSlotsHint.textContent = hintText || 'Pro vybraný den nejsou dostupné časy.';
+      bookingSave.disabled = true;
+      updatePickedLabel();
+      return;
+    }
+
+    bookingSlotsHint.textContent = '';
+    available.forEach((slot) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost slot-button';
+      button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name || 'Pracovník'}</span>`;
+      button.addEventListener('click', () => {
+        bookingState.selectedSlot = slot;
+        bookingSlots.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        updatePickedLabel();
+        updateBookingSaveState();
+      });
+      bookingSlots.appendChild(button);
+    });
+  };
+
+  const renderBookingDateMap = (dayValues = []) => {
+    if (!bookingState.serviceId) {
+      bookingDateMap.classList.add('hidden');
+      bookingDateMap.innerHTML = '';
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Vyber službu.';
+      return;
+    }
+
+    const availableDays = new Set((dayValues || []).map((day) => Number(day)));
+    const [selectedYear, selectedMonth, selectedDay] = String(bookingState.selectedDate || '').split('-').map(Number);
+    const selectedInThisMonth = selectedYear === bookingState.mapYear && selectedMonth === bookingState.mapMonth;
+    const daysInMonth = new Date(bookingState.mapYear, bookingState.mapMonth, 0).getDate();
+
+    const dayButtons = [];
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const isAvailable = availableDays.has(day);
+      const isSelected = selectedInThisMonth && selectedDay === day;
+      dayButtons.push(
+        `<button type="button" class="date-availability-day${isAvailable ? ' available' : ''}${isSelected ? ' selected' : ''}" data-day="${day}" ${isAvailable ? '' : 'disabled'}>${day}</button>`
+      );
+    }
+
+    bookingDateMap.innerHTML = `
+      <div class="date-availability-header">
+        <button type="button" class="ghost date-availability-nav" data-nav="-1">‹</button>
+        <div class="date-availability-title">${monthName(bookingState.mapMonth - 1)} ${bookingState.mapYear}</div>
+        <button type="button" class="ghost date-availability-nav" data-nav="1">›</button>
+      </div>
+      <div class="date-availability-grid">${dayButtons.join('')}</div>
+    `;
+    bookingDateMap.classList.remove('hidden');
+
+    bookingDateMap.querySelectorAll('.date-availability-nav').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const delta = Number(button.dataset.nav || 0);
+        let nextMonth = bookingState.mapMonth + delta;
+        let nextYear = bookingState.mapYear;
+        if (nextMonth < 1) {
+          nextMonth = 12;
+          nextYear -= 1;
+        } else if (nextMonth > 12) {
+          nextMonth = 1;
+          nextYear += 1;
+        }
+        bookingState.mapYear = nextYear;
+        bookingState.mapMonth = nextMonth;
+        bookingState.selectedDate = '';
+        bookingState.selectedSlot = null;
+        updatePickedLabel();
+        updateBookingSaveState();
+        await loadBookingDays();
+      });
+    });
+
+    bookingDateMap.querySelectorAll('.date-availability-day.available').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const day = Number(button.dataset.day);
+        bookingState.selectedDate = `${bookingState.mapYear}-${String(bookingState.mapMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        bookingState.selectedSlot = null;
+        updatePickedLabel();
+        updateBookingSaveState();
+        await loadBookingSlots();
+      });
+    });
+  };
+
+  const loadBookingDays = async () => {
+    if (!bookingState.serviceId) {
+      renderBookingDateMap([]);
+      return;
+    }
+    const params = new URLSearchParams({
+      year: String(bookingState.mapYear),
+      month: String(bookingState.mapMonth),
+      service_id: bookingState.serviceId
+    });
+    const response = await fetch(`/api/public/availability-days?${params.toString()}`);
+    if (!response.ok) {
+      renderBookingDateMap([]);
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Nepodařilo se načíst dostupné dny.';
+      return;
+    }
+    const data = await response.json();
+    bookingState.mapYear = Number(data.year) || bookingState.mapYear;
+    bookingState.mapMonth = Number(data.month) || bookingState.mapMonth;
+
+    const availableDays = Array.isArray(data.days) ? data.days.map((day) => Number(day)) : [];
+    if (bookingState.selectedDate) {
+      const [yy, mm, dd] = bookingState.selectedDate.split('-').map(Number);
+      const stillVisible = yy === bookingState.mapYear && mm === bookingState.mapMonth && availableDays.includes(dd);
+      if (!stillVisible) {
+        bookingState.selectedDate = '';
+        bookingState.selectedSlot = null;
+      }
+    }
+
+    renderBookingDateMap(availableDays);
+    await loadBookingSlots();
+  };
+
+  const loadBookingSlots = async () => {
+    if (!bookingState.serviceId) {
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Vyber službu.';
+      updateBookingSaveState();
+      return;
+    }
+    if (!bookingState.selectedDate) {
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Vyber den.';
+      updateBookingSaveState();
+      return;
+    }
+    const response = await fetch(
+      `/api/public/availability?date=${encodeURIComponent(bookingState.selectedDate)}&service_id=${encodeURIComponent(bookingState.serviceId)}`
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      bookingState.selectedSlot = null;
+      updatePickedLabel();
+      updateBookingSaveState();
+      renderBookingSlots([], data.error || 'Nepodařilo se načíst dostupné časy.');
+      return;
+    }
+    const data = await response.json();
+    bookingState.selectedSlot = null;
+    updatePickedLabel();
+    updateBookingSaveState();
+    renderBookingSlots(data.slots || [], 'Pro vybraný den nejsou dostupné časy.');
+  };
+
+  bookingServiceSelect.addEventListener('change', async () => {
+    bookingState.serviceId = bookingServiceSelect.value || '';
+    bookingState.selectedDate = '';
+    bookingState.selectedSlot = null;
+    updatePickedLabel();
+    updateBookingSaveState();
+    await loadBookingDays();
+  });
+  bookingName.addEventListener('input', updateBookingSaveState);
+
+  bookingSave.addEventListener('click', async () => {
+    const clientName = bookingName.value.trim();
+    if (!bookingState.serviceId || !bookingState.selectedDate || !bookingState.selectedSlot || !clientName) {
+      alert('Vyber službu, den, čas a vyplň jméno klientky.');
+      return;
+    }
+
+    await api.post('/api/public/reservations', {
+      service_id: bookingState.serviceId,
+      date: bookingState.selectedDate,
+      time: bookingState.selectedSlot.time_slot,
+      worker_id: bookingState.selectedSlot.worker_id,
+      client_name: clientName,
+      phone: bookingPhone.value.trim(),
+      email: bookingEmail.value.trim(),
+      note: bookingNote.value.trim()
+    });
+
+    alert('Rezervace byla uložena.');
+    await loadSummary();
+    await openCalendarModal();
   });
 
   if (canEditAvailability) {
@@ -2379,7 +2702,7 @@ async function openEconomyModal() {
           </div>`
         : ''}
       <div class="settings-section">
-        <h3>Výdaje</h3>
+        <h3 class="section-title-with-pill">Výdaje <span class="pro-pill">PRO</span></h3>
         <div id="ecoExpenses"></div>
       </div>
     </div>
@@ -2498,6 +2821,43 @@ async function openEconomyModal() {
     `;
   }
 
+  const formatDisplayDate = (isoDate) => {
+    const [year, month, day] = String(isoDate || '').split('-');
+    if (!year || !month || !day) return isoDate || '';
+    return `${day}.${month}.${year}`;
+  };
+
+  function buildVisitsByDayAndWorker(visits) {
+    const dayMap = new Map();
+    for (const visit of visits || []) {
+      const dayKey = String(visit.date || '');
+      if (!dayMap.has(dayKey)) {
+        dayMap.set(dayKey, { date: dayKey, total: 0, workers: new Map() });
+      }
+      const dayGroup = dayMap.get(dayKey);
+      const visitTotal = Number(visit.total) || 0;
+      dayGroup.total += visitTotal;
+
+      const workerName = visit.worker_name || 'Neurčeno';
+      if (!dayGroup.workers.has(workerName)) {
+        dayGroup.workers.set(workerName, { worker_name: workerName, total: 0, visits: [] });
+      }
+      const workerGroup = dayGroup.workers.get(workerName);
+      workerGroup.total += visitTotal;
+      workerGroup.visits.push(visit);
+    }
+
+    return Array.from(dayMap.values())
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      .map((day) => ({
+        date: day.date,
+        total: day.total,
+        workers: Array.from(day.workers.values()).sort((a, b) =>
+          String(a.worker_name).localeCompare(String(b.worker_name), 'cs')
+        )
+      }));
+  }
+
   async function loadEconomy() {
     const from = document.getElementById('ecoFrom').value;
     const to = document.getElementById('ecoTo').value;
@@ -2536,13 +2896,38 @@ async function openEconomyModal() {
     if (!data.visits.length) {
       visits.innerHTML = '<div class="hint">V tomto období nejsou žádná ošetření.</div>';
     } else {
-      visits.innerHTML = data.visits
-        .map((visit) => `
-          <div class="settings-item">
-            <span>${visit.date} • ${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}${visit.worker_name ? ` • ${visit.worker_name}` : ''}</span>
-            <span>${formatCzk(visit.total)}</span>
-          </div>
-        `)
+      const grouped = buildVisitsByDayAndWorker(data.visits);
+      visits.innerHTML = grouped
+        .map(
+          (dayGroup) => `
+            <div class="eco-day-group">
+              <div class="settings-item eco-day-header">
+                <span>${formatDisplayDate(dayGroup.date)} • Celkem den</span>
+                <span>${formatCzk(dayGroup.total)}</span>
+              </div>
+              ${dayGroup.workers
+                .map(
+                  (workerGroup) => `
+                    <div class="settings-item eco-worker-header">
+                      <span>${workerGroup.worker_name}</span>
+                      <span>${formatCzk(workerGroup.total)}</span>
+                    </div>
+                    ${workerGroup.visits
+                      .map(
+                        (visit) => `
+                          <div class="settings-item eco-visit-item">
+                            <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
+                            <span>${formatCzk(visit.total)}</span>
+                          </div>
+                        `
+                      )
+                      .join('')}
+                  `
+                )
+                .join('')}
+            </div>
+          `
+        )
         .join('');
     }
 
@@ -3289,6 +3674,8 @@ async function openSubserviceDetailModal(service, parentService) {
                 if (used.has(opt.id)) opt.id = randomId('opt');
                 used.add(opt.id);
                 opt.price_delta = Number(opt.price_delta) || 0;
+                const duration = Number(opt.duration_minutes) || 0;
+                opt.duration_minutes = duration === 0 ? 0 : Math.min(360, Math.max(15, duration - (duration % 15)));
               });
               field.options = filtered;
             } else {
@@ -3661,6 +4048,8 @@ async function openServiceDetailModal(serviceId) {
             if (used.has(opt.id)) opt.id = randomId('opt');
             used.add(opt.id);
             opt.price_delta = Number(opt.price_delta) || 0;
+            const duration = Number(opt.duration_minutes) || 0;
+            opt.duration_minutes = duration === 0 ? 0 : Math.min(360, Math.max(15, duration - (duration % 15)));
           });
           field.options = filtered;
         } else {
