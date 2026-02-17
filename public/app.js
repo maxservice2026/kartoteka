@@ -809,6 +809,16 @@ function formatBuildDateTime(value) {
   });
 }
 
+function formatTimeOnly(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toLocaleTimeString('cs-CZ', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 function setBuildInfo(healthData) {
   if (!dom.buildInfo) return;
   const version = (healthData?.version || '').toString().trim();
@@ -1467,6 +1477,7 @@ function renderVisits() {
         visits: [],
         total: 0,
         date: visit.date || '',
+        created_at: visit.created_at || '',
         payment_method: visit.payment_method || 'cash',
         worker_name: visit.worker_name || '',
         note: visit.note || '',
@@ -1478,6 +1489,13 @@ function renderVisits() {
 
     group.visits.push(visit);
     group.total += Math.max(0, Number(visit.total) || 0);
+    if (visit.created_at) {
+      const current = Date.parse(group.created_at || '') || 0;
+      const incoming = Date.parse(visit.created_at) || 0;
+      if (incoming >= current) {
+        group.created_at = visit.created_at;
+      }
+    }
 
     const serviceName = visit.service_name || 'Služba';
     const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
@@ -1492,6 +1510,8 @@ function renderVisits() {
       const title = group.titles.join(' + ') || 'Služba';
       const worker = group.worker_name ? ` • ${group.worker_name}` : '';
       const payment = group.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
+      const savedTime = formatTimeOnly(group.created_at);
+      const savedTimeLabel = savedTime ? ` • uloženo ${savedTime}` : '';
       const note = group.note ? `Poznámka: ${group.note}` : '';
       const noteLine = note ? `<div class="history-meta">${note}</div>` : '';
       const isOpen = Boolean(state.openVisitGroups[group.key]);
@@ -1502,7 +1522,7 @@ function renderVisits() {
             <span>${title}</span>
             <span>${formatCzk(group.total)}</span>
           </div>
-          <div class="history-meta">${group.date} • ${payment}${worker}</div>
+          <div class="history-meta">${group.date}${savedTimeLabel} • ${payment}${worker}</div>
           ${noteLine}
           <div class="history-actions">
             <button type="button" class="ghost history-toggle" data-history-group="${escapeHtml(group.key)}">${toggleLabel}</button>
