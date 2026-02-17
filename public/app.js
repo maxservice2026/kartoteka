@@ -217,6 +217,20 @@ function normalizeDurationMinutes(value, fallback = 0) {
 
 const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
 
+function defaultSchemaFieldLabel(type, index = 1) {
+  const labels = {
+    text: 'Text',
+    textarea: 'Text',
+    number: 'Číslo',
+    checkbox: 'Zaškrtávací políčko',
+    select: 'Výběr',
+    multiselect: 'Výběr',
+    heading: 'Nadpis'
+  };
+  const base = labels[type] || 'Pole';
+  return `${base} ${index}`;
+}
+
 function randomId(prefix = 'id') {
   if (window.crypto && typeof window.crypto.randomUUID === 'function') {
     return `${prefix}-${window.crypto.randomUUID()}`;
@@ -231,15 +245,19 @@ function parseServiceSchemaJson(schemaJson) {
     const parsed = JSON.parse(raw);
     const fields = Array.isArray(parsed.fields) ? parsed.fields : [];
     const normalizedFields = fields
-      .map((field) => ({
-        id: (field.id || '').toString().trim(),
-        type: (field.type || '').toString().trim(),
-        label: (field.label || '').toString().trim(),
+      .map((field, index) => {
+        const type = SERVICE_FIELD_TYPES.has(field.type) ? field.type : 'text';
+        const label = (field.label || '').toString().trim() || defaultSchemaFieldLabel(type, index + 1);
+        return {
+          id: (field.id || '').toString().trim(),
+          type,
+          label,
         required: field.required === true || field.required === 1 || field.required === '1',
         price_delta: Number(field.price_delta) || 0,
         options: Array.isArray(field.options) ? field.options : []
-      }))
-      .filter((field) => field.id && field.label && SERVICE_FIELD_TYPES.has(field.type));
+      };
+      })
+      .filter((field) => field.id && SERVICE_FIELD_TYPES.has(field.type));
 
     normalizedFields.forEach((field) => {
       if (field.type === 'select' || field.type === 'multiselect') {
@@ -512,7 +530,7 @@ function serviceSchemaFieldTypeOptions() {
     { value: 'text', label: 'Text' },
     { value: 'textarea', label: 'Text (více řádků)' },
     { value: 'number', label: 'Číslo' },
-    { value: 'checkbox', label: 'Zaškrtávací políčko (+cena)' },
+    { value: 'checkbox', label: 'Zaškrtávací políčko' },
     { value: 'select', label: 'Výběr (1 možnost)' },
     { value: 'multiselect', label: 'Výběr (více možností)' },
     { value: 'heading', label: 'Nadpis / oddělovač' }
@@ -523,10 +541,12 @@ function normalizeSchemaDraft(schema) {
   if (!schema || !Array.isArray(schema.fields)) return { version: 1, fields: [] };
   return {
     version: 1,
-    fields: schema.fields.map((field) => ({
+    fields: schema.fields.map((field, index) => {
+      const type = SERVICE_FIELD_TYPES.has(field.type) ? field.type : 'text';
+      return {
       id: (field.id || '').toString().trim(),
-      type: SERVICE_FIELD_TYPES.has(field.type) ? field.type : 'text',
-      label: (field.label || '').toString().trim(),
+      type,
+      label: (field.label || '').toString().trim() || defaultSchemaFieldLabel(type, index + 1),
       required: field.required === true || field.required === 1 || field.required === '1',
       price_delta: Number(field.price_delta) || 0,
       options: Array.isArray(field.options) ? field.options.map((opt) => ({
@@ -535,7 +555,8 @@ function normalizeSchemaDraft(schema) {
         price_delta: Number(opt.price_delta) || 0,
         duration_minutes: Number(opt.duration_minutes) || 0
       })) : []
-    }))
+    };
+    })
   };
 }
 
@@ -558,23 +579,6 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
 
     const rowTop = document.createElement('div');
     rowTop.className = 'field-row';
-
-    const labelWrap = document.createElement('div');
-    labelWrap.className = 'field';
-    const labelLabel = document.createElement('label');
-    labelLabel.textContent = 'Popis';
-    const labelInput = document.createElement('input');
-    labelInput.type = 'text';
-    labelInput.value = field.label || '';
-    labelInput.addEventListener('input', () => {
-      field.label = labelInput.value;
-      if (!field.id) {
-        field.id = ensureUniqueSchemaId(fields, slugifySchemaId(field.label));
-      }
-      onChange && onChange();
-    });
-    labelWrap.appendChild(labelLabel);
-    labelWrap.appendChild(labelInput);
 
     const typeWrap = document.createElement('div');
     typeWrap.className = 'field';
@@ -608,12 +612,6 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
     typeWrap.appendChild(typeLabel);
     typeWrap.appendChild(typeSelect);
 
-    rowTop.appendChild(labelWrap);
-    rowTop.appendChild(typeWrap);
-
-    const rowMeta = document.createElement('div');
-    rowMeta.className = 'field-row';
-
     const reqWrap = document.createElement('div');
     reqWrap.className = 'field';
     const reqLabel = document.createElement('label');
@@ -628,28 +626,10 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
     reqWrap.appendChild(reqLabel);
     reqWrap.appendChild(reqSelect);
 
-    const priceWrap = document.createElement('div');
-    priceWrap.className = 'field';
-    const priceLabel = document.createElement('label');
-    priceLabel.textContent = 'Cena (Kč)';
-    const priceInput = document.createElement('input');
-    priceInput.type = 'number';
-    priceInput.step = '1';
-    priceInput.min = '0';
-    priceInput.value = String(field.price_delta || 0);
-    priceInput.disabled = field.type !== 'checkbox';
-    priceInput.addEventListener('input', () => {
-      field.price_delta = priceInput.value === '' ? 0 : Number(priceInput.value) || 0;
-      onChange && onChange();
-    });
-    priceWrap.appendChild(priceLabel);
-    priceWrap.appendChild(priceInput);
-
-    rowMeta.appendChild(reqWrap);
-    rowMeta.appendChild(priceWrap);
+    rowTop.appendChild(typeWrap);
+    rowTop.appendChild(reqWrap);
 
     card.appendChild(rowTop);
-    card.appendChild(rowMeta);
 
     if (field.type === 'select' || field.type === 'multiselect') {
       const optionsWrap = document.createElement('div');
@@ -3958,12 +3938,8 @@ async function openSubserviceDetailModal(service, parentService) {
       if (!inheritForm) {
         const schemaFields = Array.isArray(schemaDraft.fields) ? schemaDraft.fields : [];
         if (schemaFields.length) {
-          for (const field of schemaFields) {
-            field.label = (field.label || '').toString().trim();
-            if (!field.label) {
-              alert('Vyplň popis u každého pole v kartě podslužby.');
-              return;
-            }
+          for (const [fieldIndex, field] of schemaFields.entries()) {
+            field.label = (field.label || '').toString().trim() || defaultSchemaFieldLabel(field.type, fieldIndex + 1);
             if (!field.id) {
               field.id = ensureUniqueSchemaId(schemaDraft.fields, slugifySchemaId(field.label));
             }
@@ -3989,7 +3965,7 @@ async function openSubserviceDetailModal(service, parentService) {
               field.options = [];
             }
             field.required = field.required === true;
-            field.price_delta = field.type === 'checkbox' ? Number(field.price_delta) || 0 : 0;
+            field.price_delta = 0;
           }
           payload.form_schema = schemaDraft;
         } else {
@@ -4332,12 +4308,8 @@ async function openServiceDetailModal(serviceId) {
 
     const schemaFields = Array.isArray(schemaDraft.fields) ? schemaDraft.fields : [];
     if (schemaFields.length) {
-      for (const field of schemaFields) {
-        field.label = (field.label || '').toString().trim();
-        if (!field.label) {
-          alert('Vyplň popis u každého pole v kartě služby.');
-          return;
-        }
+      for (const [fieldIndex, field] of schemaFields.entries()) {
+        field.label = (field.label || '').toString().trim() || defaultSchemaFieldLabel(field.type, fieldIndex + 1);
         if (!field.id) {
           field.id = ensureUniqueSchemaId(schemaDraft.fields, slugifySchemaId(field.label));
         }
@@ -4363,7 +4335,7 @@ async function openServiceDetailModal(serviceId) {
           field.options = [];
         }
         field.required = field.required === true;
-        field.price_delta = field.type === 'checkbox' ? Number(field.price_delta) || 0 : 0;
+        field.price_delta = 0;
       }
       payload.form_schema = schemaDraft;
     } else {
