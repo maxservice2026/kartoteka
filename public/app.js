@@ -1764,13 +1764,6 @@ function buildVisitDetailSections(visit) {
 function renderVisitGroupDetails(group) {
   const visits = Array.isArray(group.visits) ? group.visits : [];
   if (!visits.length) return '';
-  const workerChange = state.visitWorkerChanges[group.key] || null;
-  const workerChangeHtml = workerChange
-    ? `<div class="history-worker-change">
-        <span class="history-detail-key">Pracovník</span>
-        <span><span class="history-worker-old">${escapeHtml(workerChange.old_worker_name || 'Neurčeno')}</span> <span class="history-worker-arrow">→</span> <span class="history-worker-new">${escapeHtml(workerChange.new_worker_name || 'Neurčeno')}</span></span>
-      </div>`
-    : '';
 
   const items = visits.map((visit) => {
     const serviceName = visit.service_name || 'Služba';
@@ -1809,7 +1802,7 @@ function renderVisitGroupDetails(group) {
     `;
   });
 
-  return `<div class="history-detail-wrap">${workerChangeHtml}${items.join('')}</div>`;
+  return `<div class="history-detail-wrap">${items.join('')}</div>`;
 }
 
 function setFormValues(client) {
