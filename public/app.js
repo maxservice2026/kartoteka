@@ -327,7 +327,7 @@ function formatSignedCzk(value) {
   if (!Number.isFinite(numeric) || numeric === 0) return '';
   const abs = Math.abs(numeric);
   const formatted = `${abs.toLocaleString('cs-CZ')} Kč`;
-  return numeric > 0 ? `+${formatted}` : `-${formatted}`;
+  return numeric < 0 ? `-${formatted}` : formatted;
 }
 
 function renderSchemaFields(container, schema, onChange, initialValues = {}) {
