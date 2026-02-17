@@ -640,7 +640,7 @@ button.primary:hover {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 16px;
   font-size: 13px;
   min-height: 0;
   border: 0;
