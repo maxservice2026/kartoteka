@@ -1454,23 +1454,51 @@ function renderVisits() {
     return;
   }
 
-  dom.visitsList.innerHTML = state.visits
-    .map((visit) => {
-      const date = visit.date || '';
-      const serviceName = visit.service_name || 'Služba';
-      const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
-      const title = `${serviceName}${treatment}`.trim();
-      const worker = visit.worker_name ? ` • ${visit.worker_name}` : '';
-      const payment = visit.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
-      const note = visit.note ? `Poznámka: ${visit.note}` : '';
+  const grouped = [];
+  const byKey = new Map();
+  state.visits.forEach((visit) => {
+    const key = visit.batch_id ? `batch:${visit.batch_id}` : `single:${visit.id}`;
+    let group = byKey.get(key);
+    if (!group) {
+      group = {
+        key,
+        visits: [],
+        total: 0,
+        date: visit.date || '',
+        payment_method: visit.payment_method || 'cash',
+        worker_name: visit.worker_name || '',
+        note: visit.note || '',
+        titles: []
+      };
+      byKey.set(key, group);
+      grouped.push(group);
+    }
+
+    group.visits.push(visit);
+    group.total += Math.max(0, Number(visit.total) || 0);
+
+    const serviceName = visit.service_name || 'Služba';
+    const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
+    const visitTitle = `${serviceName}${treatment}`.trim();
+    if (visitTitle && !group.titles.includes(visitTitle)) {
+      group.titles.push(visitTitle);
+    }
+  });
+
+  dom.visitsList.innerHTML = grouped
+    .map((group) => {
+      const title = group.titles.join(' + ') || 'Služba';
+      const worker = group.worker_name ? ` • ${group.worker_name}` : '';
+      const payment = group.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
+      const note = group.note ? `Poznámka: ${group.note}` : '';
       const noteLine = note ? `<div class="history-meta">${note}</div>` : '';
       return `
         <div class="history-card">
           <div class="history-title">
             <span>${title}</span>
-            <span>${formatCzk(visit.total)}</span>
+            <span>${formatCzk(group.total)}</span>
           </div>
-          <div class="history-meta">${date} • ${payment}${worker}</div>
+          <div class="history-meta">${group.date} • ${payment}${worker}</div>
           ${noteLine}
         </div>
       `;
@@ -1784,10 +1812,13 @@ async function addGenericVisit() {
     totals[0] = adjustedFirst;
   }
 
+  const batchId = drafts.length > 1 ? randomId('batch') : null;
+
   for (let index = 0; index < drafts.length; index += 1) {
     const draft = drafts[index];
     await api.post(`/api/clients/${clientId}/visits`, {
       date: dom.genDate.value || todayLocal(),
+      batch_id: batchId,
       service_id: draft.service_id,
       manual_total: Math.round(totals[index]),
       note: dom.genNote.value.trim(),

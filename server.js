@@ -681,6 +681,7 @@ async function initDb() {
       tenant_id TEXT,
       client_id TEXT NOT NULL,
       date TEXT NOT NULL,
+      batch_id TEXT,
       service_id TEXT,
       treatment_id TEXT,
       treatment_price INTEGER NOT NULL DEFAULT 0,
@@ -810,6 +811,7 @@ async function initDb() {
 
   await ensureColumn('clients', 'cream', 'TEXT');
   await ensureColumn('visits', 'service_id', 'TEXT');
+  await ensureColumn('visits', 'batch_id', 'TEXT');
   await ensureColumn('visits', 'service_data', 'TEXT');
   await ensureColumn('expenses', 'vat_rate', 'INTEGER DEFAULT 0');
   await ensureColumn('expenses', 'worker_id', 'TEXT');
@@ -2825,6 +2827,8 @@ app.get('/api/clients/:id/visits', async (req, res) => {
 app.post('/api/clients/:id/visits', async (req, res) => {
   const payload = req.body || {};
   const clientId = req.params.id;
+  const batchIdRaw = (payload.batch_id || '').toString().trim();
+  const batchId = batchIdRaw ? batchIdRaw.slice(0, 120) : null;
 
   const client = await db.get('SELECT id FROM clients WHERE id = ? AND tenant_id = ?', [clientId, req.tenant.id]);
   if (!client) return res.status(404).json({ error: 'Client not found' });
@@ -2900,9 +2904,9 @@ app.post('/api/clients/:id/visits', async (req, res) => {
     await db.run(
       `INSERT INTO visits (
         id, tenant_id, client_id, date, service_id, treatment_id, treatment_price,
-        addons_json, addons_total, manual_total, total, service_data, note,
+        addons_json, addons_total, manual_total, total, batch_id, service_data, note,
         worker_id, payment_method, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ,
       [
         id,
@@ -2916,6 +2920,7 @@ app.post('/api/clients/:id/visits', async (req, res) => {
         addonsTotal,
         finalTotal,
         finalTotal,
+        batchId,
         serviceData,
         payload.note || null,
         workerId,
