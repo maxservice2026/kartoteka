@@ -87,6 +87,7 @@ const state = {
   currentServiceTouched: false,
   pendingServiceOrder: [],
   pendingServiceDrafts: {},
+  openVisitGroups: {},
   auth: {
     token: null,
     user: null,
@@ -1187,6 +1188,7 @@ async function loadClients() {
 
 async function loadVisits(clientId) {
   state.visits = clientId ? await api.get(`/api/clients/${clientId}/visits`) : [];
+  state.openVisitGroups = {};
   renderVisits();
 }
 
@@ -1492,6 +1494,8 @@ function renderVisits() {
       const payment = group.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
       const note = group.note ? `Poznámka: ${group.note}` : '';
       const noteLine = note ? `<div class="history-meta">${note}</div>` : '';
+      const isOpen = Boolean(state.openVisitGroups[group.key]);
+      const toggleLabel = isOpen ? 'Skrýt detail' : 'Otevřít detail';
       return `
         <div class="history-card">
           <div class="history-title">
@@ -1500,10 +1504,126 @@ function renderVisits() {
           </div>
           <div class="history-meta">${group.date} • ${payment}${worker}</div>
           ${noteLine}
+          <div class="history-actions">
+            <button type="button" class="ghost history-toggle" data-history-group="${escapeHtml(group.key)}">${toggleLabel}</button>
+          </div>
+          ${isOpen ? renderVisitGroupDetails(group) : ''}
         </div>
       `;
     })
     .join('');
+
+  dom.visitsList.querySelectorAll('.history-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.historyGroup || '';
+      if (!key) return;
+      state.openVisitGroups[key] = !state.openVisitGroups[key];
+      renderVisits();
+    });
+  });
+}
+
+function parseJsonSafe(value, fallback = null) {
+  try {
+    const parsed = JSON.parse((value || '').toString());
+    return parsed === null || parsed === undefined ? fallback : parsed;
+  } catch (err) {
+    return fallback;
+  }
+}
+
+function isEmptyServiceValue(value) {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'string') return value.trim() === '';
+  return false;
+}
+
+function formatServiceFieldValue(field, value) {
+  if (field.type === 'checkbox') {
+    return value ? 'Ano' : 'Ne';
+  }
+  if (field.type === 'select') {
+    const option = (field.options || []).find((opt) => opt.id === String(value));
+    return option ? option.label : String(value);
+  }
+  if (field.type === 'multiselect') {
+    const values = Array.isArray(value) ? value : [];
+    if (!values.length) return '';
+    const labels = values.map((id) => {
+      const option = (field.options || []).find((opt) => opt.id === String(id));
+      return option ? option.label : String(id);
+    });
+    return labels.join(', ');
+  }
+  return String(value);
+}
+
+function renderVisitServiceData(visit) {
+  const data = parseJsonSafe(visit.service_data, {});
+  if (!data || typeof data !== 'object') return '';
+  const schema = parseServiceSchemaJson(visit.service_schema_json);
+  const rows = [];
+  const usedKeys = new Set();
+
+  if (schema && Array.isArray(schema.fields)) {
+    schema.fields.forEach((field) => {
+      if (!field || !field.id || field.type === 'heading') return;
+      const raw = data[field.id];
+      if (isEmptyServiceValue(raw)) return;
+      const value = formatServiceFieldValue(field, raw);
+      if (!value) return;
+      rows.push(`
+        <div class="history-detail-row">
+          <span class="history-detail-key">${escapeHtml(field.label || field.id)}</span>
+          <span>${escapeHtml(value)}</span>
+        </div>
+      `);
+      usedKeys.add(field.id);
+    });
+  }
+
+  Object.entries(data).forEach(([key, raw]) => {
+    if (usedKeys.has(key) || isEmptyServiceValue(raw)) return;
+    const value = Array.isArray(raw) ? raw.join(', ') : String(raw);
+    if (!value.trim()) return;
+    rows.push(`
+      <div class="history-detail-row">
+        <span class="history-detail-key">${escapeHtml(key)}</span>
+        <span>${escapeHtml(value)}</span>
+      </div>
+    `);
+  });
+
+  if (!rows.length) return '';
+  return `<div class="history-detail-grid">${rows.join('')}</div>`;
+}
+
+function renderVisitGroupDetails(group) {
+  const visits = Array.isArray(group.visits) ? group.visits : [];
+  if (!visits.length) return '';
+
+  const items = visits.map((visit) => {
+    const serviceName = visit.service_name || 'Služba';
+    const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
+    const title = `${serviceName}${treatment}`.trim();
+    const details = renderVisitServiceData(visit);
+    const note = (visit.note || '').toString().trim();
+    const noteHtml = note ? `<div class="history-meta">Poznámka: ${escapeHtml(note)}</div>` : '';
+    const detailsHtml = details || '<div class="history-meta">Bez doplňujících údajů.</div>';
+    return `
+      <div class="history-detail-item">
+        <div class="history-detail-head">
+          <span>${escapeHtml(title)}</span>
+          <span>${formatCzk(visit.total)}</span>
+        </div>
+        ${detailsHtml}
+        ${noteHtml}
+      </div>
+    `;
+  });
+
+  return `<div class="history-detail-wrap">${items.join('')}</div>`;
 }
 
 function setFormValues(client) {

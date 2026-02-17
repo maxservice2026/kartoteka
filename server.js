@@ -2809,7 +2809,7 @@ app.get('/api/clients/:id/visits', async (req, res) => {
   const rows = await db.all(
     `SELECT v.*, c.full_name as client_name, t.name as treatment_name,
             COALESCE(u.full_name, w.name) as worker_name,
-            s.name as service_name, s.form_type as service_form_type
+            s.name as service_name, s.form_type as service_form_type, s.form_schema_json as service_schema_json
      FROM visits v
      LEFT JOIN clients c ON v.client_id = c.id
      LEFT JOIN services s ON v.service_id = s.id

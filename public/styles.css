@@ -892,6 +892,54 @@ button.primary:hover {
   color: var(--muted);
 }
 
+.history-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.history-actions .history-toggle {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.history-detail-wrap {
+  display: grid;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.history-detail-item {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  background: #fff;
+}
+
+.history-detail-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.history-detail-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.history-detail-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.history-detail-key {
+  color: var(--muted);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
