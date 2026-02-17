@@ -1465,6 +1465,15 @@ function parseServiceOptionKey(rawKey) {
   return { key: normalized, fieldId, optionId };
 }
 
+function parseSelectedOptionKeys(rawValue) {
+  if (Array.isArray(rawValue)) {
+    return Array.from(new Set(rawValue.map((item) => String(item || '').trim()).filter(Boolean)));
+  }
+  const normalized = (rawValue || '').toString().trim();
+  if (!normalized) return [];
+  return Array.from(new Set(normalized.split(',').map((item) => item.trim()).filter(Boolean)));
+}
+
 function resolveServiceOptionByKey(serviceRow, rawOptionKey) {
   const parsedKey = parseServiceOptionKey(rawOptionKey);
   if (!parsedKey) return null;
@@ -1509,20 +1518,26 @@ async function resolveSelectedServices(serviceIds, tenantId, optionSelection = {
 
   const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
   let duration = serviceIds.reduce((sum, id) => sum + Math.max(0, toInt(serviceById.get(id)?.duration_minutes, 0)), 0);
-  let selectedOption = null;
+  const selectedOptions = [];
 
   if (serviceIds.length === 1) {
     const serviceId = serviceIds[0];
-    const optionKey = (optionSelection[serviceId] || optionSelection.default || '').toString().trim();
-    if (optionKey) {
+    const optionKeys = parseSelectedOptionKeys(optionSelection[serviceId] || optionSelection.default || '');
+    if (optionKeys.length) {
       const service = serviceById.get(serviceId);
-      const resolvedOption = resolveServiceOptionByKey(service, optionKey);
-      if (!resolvedOption) {
-        return { error: 'Vybraná minislužba není platná.', status: 400 };
+      for (const optionKey of optionKeys) {
+        const resolvedOption = resolveServiceOptionByKey(service, optionKey);
+        if (!resolvedOption) {
+          return { error: 'Vybraná minislužba není platná.', status: 400 };
+        }
+        selectedOptions.push(resolvedOption);
       }
-      selectedOption = resolvedOption;
-      if (resolvedOption.duration_minutes > 0) {
-        duration = resolvedOption.duration_minutes;
+      const durationFromOptions = selectedOptions.reduce(
+        (sum, option) => sum + Math.max(0, toInt(option.duration_minutes, 0)),
+        0
+      );
+      if (durationFromOptions > 0) {
+        duration = durationFromOptions;
       }
     }
   }
@@ -1530,7 +1545,7 @@ async function resolveSelectedServices(serviceIds, tenantId, optionSelection = {
   if (duration <= 0) {
     return { error: 'Vybraná služba nemá časovou dotaci pro online rezervaci.', status: 400 };
   }
-  return { serviceRows, serviceById, duration, selectedOption };
+  return { serviceRows, serviceById, duration, selectedOptions };
 }
 
 async function calculatePublicAvailability(tenantId, date, duration) {
@@ -1708,10 +1723,10 @@ async function calculatePublicAvailability(tenantId, date, duration) {
 app.get('/api/public/availability', async (req, res) => {
   const date = toDateOnly(req.query.date);
   const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
-  const optionKey = (req.query.option_key || '').toString().trim();
+  const optionKeys = parseSelectedOptionKeys(req.query.option_keys || req.query.option_key || '');
   const optionSelection =
-    optionKey && serviceIds.length === 1
-      ? { [serviceIds[0]]: optionKey }
+    optionKeys.length && serviceIds.length === 1
+      ? { [serviceIds[0]]: optionKeys }
       : {};
   const selected = await resolveSelectedServices(serviceIds, req.tenant.id, optionSelection);
   if (selected.error) {
@@ -1731,10 +1746,10 @@ app.get('/api/public/availability-days', async (req, res) => {
     return res.status(400).json({ error: 'Neplatný měsíc.' });
   }
   const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
-  const optionKey = (req.query.option_key || '').toString().trim();
+  const optionKeys = parseSelectedOptionKeys(req.query.option_keys || req.query.option_key || '');
   const optionSelection =
-    optionKey && serviceIds.length === 1
-      ? { [serviceIds[0]]: optionKey }
+    optionKeys.length && serviceIds.length === 1
+      ? { [serviceIds[0]]: optionKeys }
       : {};
   const selected = await resolveSelectedServices(serviceIds, req.tenant.id, optionSelection);
   if (selected.error) {
@@ -1768,15 +1783,15 @@ app.post('/api/public/reservations', async (req, res) => {
   const phone = (payload.phone || '').trim();
   const email = (payload.email || '').trim();
   const note = (payload.note || '').trim();
-  const optionKey = (payload.option_key || '').toString().trim();
+  const optionKeys = parseSelectedOptionKeys(payload.option_keys || payload.option_key || '');
 
   if (!uniqueServiceIds.length || !workerId || !date || !timeSlot || !clientName) {
     return res.status(400).json({ error: 'Vyplňte služby, termín a jméno.' });
   }
 
   const optionSelection =
-    optionKey && uniqueServiceIds.length === 1
-      ? { [uniqueServiceIds[0]]: optionKey }
+    optionKeys.length && uniqueServiceIds.length === 1
+      ? { [uniqueServiceIds[0]]: optionKeys }
       : {};
   const selected = await resolveSelectedServices(uniqueServiceIds, req.tenant.id, optionSelection);
   if (selected.error) {
@@ -1856,8 +1871,8 @@ app.post('/api/public/reservations', async (req, res) => {
   if (serviceNames.length > 1) {
     noteParts.push(`[Služby: ${serviceNames.join(', ')}]`);
   }
-  if (selected.selectedOption?.label) {
-    noteParts.push(`[Minislužba: ${selected.selectedOption.label}]`);
+  if (Array.isArray(selected.selectedOptions) && selected.selectedOptions.length) {
+    noteParts.push(`[Minislužby: ${selected.selectedOptions.map((item) => item.label).join(', ')}]`);
   }
   if (note) {
     noteParts.push(note);

@@ -2272,7 +2272,7 @@ async function openCalendarModal() {
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'));
   const bookingCatalog = leafServices.map((service) => {
     const schema = parseServiceSchemaJson(service.form_schema_json);
-    const miniOptions = [];
+    const rawMiniOptions = [];
     if (schema && Array.isArray(schema.fields)) {
       schema.fields.forEach((field) => {
         if (field.type !== 'select' && field.type !== 'multiselect') return;
@@ -2280,14 +2280,24 @@ async function openCalendarModal() {
           const optionId = (option.id || '').toString().trim();
           const optionLabel = (option.label || '').toString().trim();
           if (!optionId || !optionLabel) return;
-          miniOptions.push({
+          rawMiniOptions.push({
             key: `${field.id}::${optionId}`,
-            label: `${field.label}: ${optionLabel}`,
+            field_label: (field.label || '').toString().trim(),
+            option_label: optionLabel,
             duration_minutes: normalizeDurationMinutes(option.duration_minutes, 0)
           });
         });
       });
     }
+    const distinctFieldLabels = new Set(rawMiniOptions.map((item) => item.field_label).filter(Boolean));
+    const miniOptions = rawMiniOptions.map((option) => ({
+      key: option.key,
+      label:
+        distinctFieldLabels.size > 1 && option.field_label
+          ? `${option.field_label}: ${option.option_label}`
+          : option.option_label,
+      duration_minutes: option.duration_minutes
+    }));
     return {
       id: service.id,
       name: service.name || 'Služba',
@@ -2315,19 +2325,21 @@ async function openCalendarModal() {
     <div class="modal-grid">
       <div class="settings-section">
         <h3>Nová rezervace</h3>
-        <div class="meta">Nejprve vyber službu (a případně minislužbu), pak den a čas.</div>
+        <div class="meta">Nejprve vyber službu, případně zaškrtni minislužby (chatbox), pak den a čas.</div>
         <div class="field-row">
           <div class="field">
             <label>Služba</label>
             <select id="calendarBookingService">${bookingServiceOptions}</select>
           </div>
           <div class="field">
-            <label>Minislužba (chatbox)</label>
-            <select id="calendarBookingVariant" disabled>
-              <option value="">Bez minislužby</option>
-            </select>
-            <div class="meta" id="calendarBookingVariantHint">Vyber službu.</div>
+            <label>Celkový čas</label>
+            <input type="text" id="calendarBookingDuration" value="0 min" readonly />
           </div>
+        </div>
+        <div class="field">
+          <label>Minislužby (chatbox)</label>
+          <div id="calendarBookingVariants" class="addon-block hidden"></div>
+          <div class="meta" id="calendarBookingVariantHint">Vyber službu.</div>
         </div>
         <div class="field-row">
           <div class="field">
@@ -2440,16 +2452,18 @@ async function openCalendarModal() {
 
   const bookingState = {
     serviceId: '',
-    optionKey: '',
-    optionLabel: '',
+    optionKeys: [],
+    optionLabels: [],
     selectedDate: '',
     selectedSlot: null,
     mapYear: year,
-    mapMonth: monthNumber
+    mapMonth: monthNumber,
+    duration: 0
   };
   const bookingServiceSelect = document.getElementById('calendarBookingService');
-  const bookingVariantSelect = document.getElementById('calendarBookingVariant');
+  const bookingVariantWrap = document.getElementById('calendarBookingVariants');
   const bookingVariantHint = document.getElementById('calendarBookingVariantHint');
+  const bookingDuration = document.getElementById('calendarBookingDuration');
   const bookingDateMap = document.getElementById('calendarBookingDateMap');
   const bookingSlots = document.getElementById('calendarBookingSlots');
   const bookingSlotsHint = document.getElementById('calendarBookingSlotsHint');
@@ -2468,63 +2482,100 @@ async function openCalendarModal() {
 
   const getSelectedBookingService = () => bookingCatalogById.get(String(bookingState.serviceId)) || null;
 
-  const syncVariantSelect = () => {
+  const getSelectedBookingOptions = (service = null) => {
+    const selectedService = service || getSelectedBookingService();
+    if (!selectedService) return [];
+    const keySet = new Set(bookingState.optionKeys || []);
+    return (selectedService.miniOptions || []).filter((option) => keySet.has(option.key));
+  };
+
+  const updateBookingDuration = () => {
     const selectedService = getSelectedBookingService();
     if (!selectedService) {
-      bookingVariantSelect.disabled = true;
-      bookingVariantSelect.innerHTML = '<option value="">Bez minislužby</option>';
+      bookingState.duration = 0;
+      bookingDuration.value = '0 min';
+      return;
+    }
+    const selectedOptions = getSelectedBookingOptions(selectedService);
+    if (!selectedOptions.length) {
+      bookingState.duration = normalizeDurationMinutes(selectedService.duration_minutes, 0);
+      bookingDuration.value = `${bookingState.duration} min`;
+      return;
+    }
+    const optionsDuration = selectedOptions.reduce(
+      (sum, option) => sum + normalizeDurationMinutes(option.duration_minutes, 0),
+      0
+    );
+    bookingState.duration =
+      optionsDuration > 0 ? optionsDuration : normalizeDurationMinutes(selectedService.duration_minutes, 0);
+    bookingDuration.value = `${bookingState.duration} min`;
+  };
+
+  const syncVariantChoices = () => {
+    const selectedService = getSelectedBookingService();
+    if (!selectedService) {
+      bookingVariantWrap.classList.add('hidden');
+      bookingVariantWrap.innerHTML = '';
       bookingVariantHint.textContent = 'Vyber službu.';
-      bookingState.optionKey = '';
-      bookingState.optionLabel = '';
+      bookingState.optionKeys = [];
+      bookingState.optionLabels = [];
+      updateBookingDuration();
       return;
     }
 
     const options = Array.isArray(selectedService.miniOptions) ? selectedService.miniOptions : [];
     if (!options.length) {
-      bookingVariantSelect.disabled = true;
-      bookingVariantSelect.innerHTML = '<option value="">Bez minislužby</option>';
+      bookingVariantWrap.classList.add('hidden');
+      bookingVariantWrap.innerHTML = '';
       bookingVariantHint.textContent = 'Pro tuto službu nejsou nastavené minislužby.';
-      bookingState.optionKey = '';
-      bookingState.optionLabel = '';
+      bookingState.optionKeys = [];
+      bookingState.optionLabels = [];
+      updateBookingDuration();
       return;
     }
 
-    bookingVariantSelect.disabled = false;
-    bookingVariantSelect.innerHTML = [
-      `<option value="">Bez minislužby (${normalizeDurationMinutes(selectedService.duration_minutes, 0)} min)</option>`,
-      ...options.map((option) => {
+    bookingVariantWrap.classList.remove('hidden');
+    bookingVariantHint.textContent = 'Zaškrtni minislužby stejně jako v kartě klientky.';
+
+    const selectedKeys = new Set(bookingState.optionKeys || []);
+    const listHtml = options
+      .map((option) => {
         const duration = normalizeDurationMinutes(option.duration_minutes, 0);
-        const suffix = duration > 0 ? ` • ${duration} min` : '';
-        return `<option value="${escapeHtml(option.key)}">${escapeHtml(option.label)}${suffix}</option>`;
+        const durationLabel = duration > 0 ? ` (${duration} min)` : '';
+        const optionText = `${option.label}${durationLabel}`;
+        const longClass = optionText.length > 43 ? ' addon-item-long' : '';
+        return `
+          <label class="addon-item${longClass}">
+            <input type="checkbox" class="calendar-booking-option" value="${escapeHtml(option.key)}" ${
+          selectedKeys.has(option.key) ? 'checked' : ''
+        } />
+            <span>${escapeHtml(optionText)}</span>
+          </label>
+        `;
       })
-    ].join('');
-    bookingVariantHint.textContent = 'Volitelně vyber konkrétní minislužbu.';
-    bookingVariantSelect.value = '';
-    bookingState.optionKey = '';
-    bookingState.optionLabel = '';
-  };
+      .join('');
 
-  const applySelectedVariant = () => {
-    const selectedService = getSelectedBookingService();
-    if (!selectedService) {
-      bookingState.optionKey = '';
-      bookingState.optionLabel = '';
-      return;
-    }
-    const selectedKey = (bookingVariantSelect.value || '').trim();
-    if (!selectedKey) {
-      bookingState.optionKey = '';
-      bookingState.optionLabel = '';
-      return;
-    }
-    const option = (selectedService.miniOptions || []).find((item) => item.key === selectedKey);
-    if (!option) {
-      bookingState.optionKey = '';
-      bookingState.optionLabel = '';
-      return;
-    }
-    bookingState.optionKey = option.key;
-    bookingState.optionLabel = option.label;
+    bookingVariantWrap.innerHTML = `<div class="addon-list">${listHtml}</div>`;
+    const optionInputs = bookingVariantWrap.querySelectorAll('.calendar-booking-option');
+    optionInputs.forEach((input) => {
+      input.addEventListener('change', async () => {
+        const checkedKeys = Array.from(optionInputs)
+          .filter((item) => item.checked)
+          .map((item) => item.value);
+        const keySet = new Set(checkedKeys);
+        bookingState.optionKeys = checkedKeys;
+        bookingState.optionLabels = options.filter((item) => keySet.has(item.key)).map((item) => item.label);
+        bookingState.selectedDate = '';
+        bookingState.selectedSlot = null;
+        updateBookingDuration();
+        updatePickedLabel();
+        updateBookingSaveState();
+        await loadBookingDays();
+      });
+    });
+    const keySet = new Set(bookingState.optionKeys || []);
+    bookingState.optionLabels = options.filter((item) => keySet.has(item.key)).map((item) => item.label);
+    updateBookingDuration();
   };
 
   const updatePickedLabel = () => {
@@ -2532,14 +2583,16 @@ async function openCalendarModal() {
       bookingPicked.value = '';
       return;
     }
-    const variantLabel = bookingState.optionLabel ? ` • ${bookingState.optionLabel}` : '';
+    const variantLabel = bookingState.optionLabels.length ? ` • ${bookingState.optionLabels.join(', ')}` : '';
+    const durationLabel = bookingState.duration > 0 ? ` • ${bookingState.duration} min` : '';
     bookingPicked.value =
-      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}${variantLabel}`;
+      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}${durationLabel}${variantLabel}`;
   };
 
   const updateBookingSaveState = () => {
     bookingSave.disabled = !(
       bookingState.serviceId &&
+      bookingState.duration > 0 &&
       bookingState.selectedDate &&
       bookingState.selectedSlot &&
       bookingName.value.trim()
@@ -2645,13 +2698,21 @@ async function openCalendarModal() {
       renderBookingDateMap([]);
       return;
     }
+    if (bookingState.duration <= 0) {
+      bookingDateMap.classList.add('hidden');
+      bookingDateMap.innerHTML = '';
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Vyber službu/minislužby s časovou dotací.';
+      updateBookingSaveState();
+      return;
+    }
     const params = new URLSearchParams({
       year: String(bookingState.mapYear),
       month: String(bookingState.mapMonth),
       service_id: bookingState.serviceId
     });
-    if (bookingState.optionKey) {
-      params.set('option_key', bookingState.optionKey);
+    if (bookingState.optionKeys.length) {
+      params.set('option_keys', bookingState.optionKeys.join(','));
     }
     const response = await fetch(`/api/public/availability-days?${params.toString()}`);
     if (!response.ok) {
@@ -2685,6 +2746,12 @@ async function openCalendarModal() {
       updateBookingSaveState();
       return;
     }
+    if (bookingState.duration <= 0) {
+      bookingSlots.innerHTML = '';
+      bookingSlotsHint.textContent = 'Vyber službu/minislužby s časovou dotací.';
+      updateBookingSaveState();
+      return;
+    }
     if (!bookingState.selectedDate) {
       bookingSlots.innerHTML = '';
       bookingSlotsHint.textContent = 'Vyber den.';
@@ -2695,8 +2762,8 @@ async function openCalendarModal() {
       date: bookingState.selectedDate,
       service_id: bookingState.serviceId
     });
-    if (bookingState.optionKey) {
-      params.set('option_key', bookingState.optionKey);
+    if (bookingState.optionKeys.length) {
+      params.set('option_keys', bookingState.optionKeys.join(','));
     }
     const response = await fetch(`/api/public/availability?${params.toString()}`);
     if (!response.ok) {
@@ -2716,15 +2783,9 @@ async function openCalendarModal() {
 
   bookingServiceSelect.addEventListener('change', async () => {
     bookingState.serviceId = bookingServiceSelect.value || '';
-    syncVariantSelect();
-    bookingState.selectedDate = '';
-    bookingState.selectedSlot = null;
-    updatePickedLabel();
-    updateBookingSaveState();
-    await loadBookingDays();
-  });
-  bookingVariantSelect.addEventListener('change', async () => {
-    applySelectedVariant();
+    bookingState.optionKeys = [];
+    bookingState.optionLabels = [];
+    syncVariantChoices();
     bookingState.selectedDate = '';
     bookingState.selectedSlot = null;
     updatePickedLabel();
@@ -2742,7 +2803,7 @@ async function openCalendarModal() {
 
     await api.post('/api/public/reservations', {
       service_id: bookingState.serviceId,
-      option_key: bookingState.optionKey || null,
+      option_keys: bookingState.optionKeys,
       date: bookingState.selectedDate,
       time: bookingState.selectedSlot.time_slot,
       worker_id: bookingState.selectedSlot.worker_id,
@@ -2756,6 +2817,8 @@ async function openCalendarModal() {
     await loadSummary();
     await openCalendarModal();
   });
+
+  updateBookingDuration();
 
   if (canEditAvailability) {
     const data = await api.get('/api/availability');
@@ -2783,7 +2846,7 @@ async function openCalendarModal() {
     });
   }
 
-  syncVariantSelect();
+  syncVariantChoices();
   await loadBookingDays();
 }
 
