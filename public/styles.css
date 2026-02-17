@@ -208,6 +208,12 @@ button.pro-button:disabled {
   letter-spacing: 0.6px;
 }
 
+.section-title-with-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 button.ghost:hover,
 button.primary:hover {
   transform: translateY(-1px);
@@ -439,6 +445,11 @@ button.primary:hover {
 .service-form {
   display: grid;
   gap: 12px;
+}
+
+.service-summary {
+  font-size: 13px;
+  color: var(--muted);
 }
 
 .form {

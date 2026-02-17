@@ -21,10 +21,11 @@
         </div>
         <div class="actions">
           <button class="ghost" id="btnSettings">Nastavení</button>
-          <button class="ghost pro-button" id="btnEconomy">Ekonomika <span class="pro-pill">PRO</span></button>
-          <button class="ghost pro-button" id="btnCalendar">Kalendář <span class="pro-pill">PRO</span></button>
-          <button class="ghost pro-button" id="btnBilling">Fakturace <span class="pro-pill">PRO</span></button>
-          <button class="ghost pro-button" id="btnNotifications">Notifikace <span class="pro-pill">PRO</span></button>
+          <button class="ghost" id="btnEconomy">Ekonomika</button>
+          <button class="ghost" id="btnInventory">Sklad</button>
+          <button class="ghost" id="btnCalendar">Kalendář</button>
+          <button class="ghost" id="btnBilling">Fakturace</button>
+          <button class="ghost" id="btnNotifications">Notifikace</button>
         </div>
         <div class="server-status" id="serverStatus">
           <span class="status-dot" id="serverDot"></span>
@@ -85,6 +86,7 @@
 
               <div id="serviceFormGeneric" class="service-form hidden">
                 <div id="genericSchemaFields" class="custom-fields"></div>
+                <div id="genSelectedServices" class="service-summary">Vybrané služby: žádné</div>
                 <div class="field-row">
                   <div class="field">
                     <label>Cena z karty (automaticky)</label>

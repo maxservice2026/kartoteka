@@ -25,6 +25,7 @@ const dom = {
   servicePicker: document.getElementById('servicePicker'),
   serviceFormGeneric: document.getElementById('serviceFormGeneric'),
   genericSchemaFields: document.getElementById('genericSchemaFields'),
+  genSelectedServices: document.getElementById('genSelectedServices'),
   genPrice: document.getElementById('genPrice'),
   genDate: document.getElementById('genDate'),
   genSchemaExtras: document.getElementById('genSchemaExtras'),
@@ -83,6 +84,9 @@ const state = {
   selectedServiceId: null,
   selectedServiceSchema: null,
   selectedServiceSchemaJson: null,
+  currentServiceTouched: false,
+  pendingServiceOrder: [],
+  pendingServiceDrafts: {},
   auth: {
     token: null,
     user: null,
@@ -325,7 +329,7 @@ function formatSignedCzk(value) {
   return numeric > 0 ? `+${formatted}` : `-${formatted}`;
 }
 
-function renderSchemaFields(container, schema, onChange) {
+function renderSchemaFields(container, schema, onChange, initialValues = {}) {
   if (!container) return;
   container.innerHTML = '';
   if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return;
@@ -351,6 +355,7 @@ function renderSchemaFields(container, schema, onChange) {
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.dataset.schemaField = field.id;
+      input.checked = Boolean(initialValues[field.id]);
 
       const label = document.createElement('label');
       const price = formatSignedCzk(field.price_delta);
@@ -384,6 +389,8 @@ function renderSchemaFields(container, schema, onChange) {
         checkbox.type = 'checkbox';
         checkbox.dataset.schemaField = field.id;
         checkbox.dataset.schemaOption = opt.id;
+        const selected = Array.isArray(initialValues[field.id]) ? initialValues[field.id] : [];
+        checkbox.checked = selected.includes(opt.id);
         checkbox.addEventListener('change', () => onChange && onChange());
         item.appendChild(left);
         item.appendChild(checkbox);
@@ -405,6 +412,7 @@ function renderSchemaFields(container, schema, onChange) {
       const textarea = document.createElement('textarea');
       textarea.rows = 3;
       textarea.dataset.schemaField = field.id;
+      textarea.value = initialValues[field.id] ?? '';
       textarea.addEventListener('input', () => onChange && onChange());
       wrapper.appendChild(textarea);
       container.appendChild(wrapper);
@@ -426,6 +434,10 @@ function renderSchemaFields(container, schema, onChange) {
         select.appendChild(option);
       });
       select.addEventListener('change', () => onChange && onChange());
+      const preset = initialValues[field.id];
+      if (preset !== undefined && preset !== null) {
+        select.value = String(preset);
+      }
       wrapper.appendChild(select);
       container.appendChild(wrapper);
       return;
@@ -437,6 +449,12 @@ function renderSchemaFields(container, schema, onChange) {
       input.step = '1';
     }
     input.dataset.schemaField = field.id;
+    if (field.type === 'number') {
+      const preset = initialValues[field.id];
+      input.value = preset === undefined || preset === null ? '' : String(preset);
+    } else {
+      input.value = initialValues[field.id] ?? '';
+    }
     input.addEventListener('input', () => onChange && onChange());
     wrapper.appendChild(input);
     container.appendChild(wrapper);
@@ -1347,7 +1365,7 @@ function renderServiceButtons(autoSelect = false) {
     if (!button.dataset.id) return;
     button.addEventListener('click', (event) => {
       event.stopPropagation();
-      selectService(button.dataset.id);
+      selectService(button.dataset.id, { userTriggered: true });
       closeAllServiceParentMenus();
     });
   });
@@ -1367,37 +1385,37 @@ function renderServiceButtons(autoSelect = false) {
     };
     const firstLeaf = findFirstLeaf('');
     if (firstLeaf) {
-      selectService(firstLeaf.id);
+      selectService(firstLeaf.id, { userTriggered: false });
     }
   } else if (state.selectedServiceId) {
-    selectService(state.selectedServiceId);
+    selectService(state.selectedServiceId, { userTriggered: false });
   } else {
     dom.serviceFormGeneric.classList.add('hidden');
   }
 }
 
-function selectService(id) {
+function selectService(id, options = {}) {
   const previous = state.selectedServiceId;
+  if (previous && previous !== id) {
+    storeCurrentServiceDraft();
+  }
+
   state.selectedServiceId = id;
   const service = state.settings.services.find((item) => item.id === id);
   if (!service) return;
   const schemaJson = (service.form_schema_json || '').toString();
-  const schemaChanged = schemaJson !== (state.selectedServiceSchemaJson || '');
   state.selectedServiceSchemaJson = schemaJson;
   state.selectedServiceSchema = parseServiceSchemaJson(schemaJson);
+  const draft = getPendingServiceDraft(id);
+  state.currentServiceTouched = Boolean(draft) || Boolean(options.userTriggered);
 
   dom.servicePicker.querySelectorAll('.service-button').forEach((button) => {
     button.classList.toggle('active', button.dataset.id === id);
   });
 
   dom.serviceFormGeneric.classList.remove('hidden');
-
-  if (previous !== id || schemaChanged) {
-    resetVisitFields();
-  } else {
-    renderActiveSchemaFields();
-    updateGenericPricePreview();
-  }
+  renderActiveSchemaFields(draft?.service_data || {});
+  updateGenericPricePreview();
 }
 
 function renderClients() {
@@ -1469,8 +1487,118 @@ function setFormValues(client) {
   dom.cream.value = client?.cream || '';
 }
 
-function resetVisitFields() {
+function getSelectedService() {
+  if (!state.selectedServiceId) return null;
+  return state.settings.services.find((item) => item.id === state.selectedServiceId) || null;
+}
+
+function getPendingServiceDraft(serviceId) {
+  return state.pendingServiceDrafts[String(serviceId)] || null;
+}
+
+function upsertPendingServiceDraft(draft) {
+  if (!draft || !draft.service_id) return;
+  const key = String(draft.service_id);
+  if (!state.pendingServiceOrder.includes(key)) {
+    state.pendingServiceOrder.push(key);
+  }
+  state.pendingServiceDrafts[key] = draft;
+}
+
+function removePendingServiceDraft(serviceId) {
+  const key = String(serviceId || '');
+  if (!key) return;
+  delete state.pendingServiceDrafts[key];
+  state.pendingServiceOrder = state.pendingServiceOrder.filter((id) => id !== key);
+}
+
+function clearPendingServiceDrafts() {
+  state.pendingServiceDrafts = {};
+  state.pendingServiceOrder = [];
+  state.currentServiceTouched = false;
+}
+
+function hasSchemaSelectionValues(values) {
+  const entries = Object.values(values || {});
+  return entries.some((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === 'boolean') return value;
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim() !== '';
+    return true;
+  });
+}
+
+function buildCurrentServiceDraft() {
+  const selectedService = getSelectedService();
+  if (!selectedService) return null;
+  const schemaValues = collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema);
+  const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
+  const basePrice = Math.max(0, Number(selectedService.price) || 0);
+  return {
+    service_id: selectedService.id,
+    service_name: selectedService.name || 'Služba',
+    service_data: schemaValues,
+    auto_total: basePrice + schemaPrice
+  };
+}
+
+function shouldStoreCurrentDraft(draft) {
+  if (!draft) return false;
+  return Boolean(state.currentServiceTouched || hasSchemaSelectionValues(draft.service_data));
+}
+
+function storeCurrentServiceDraft({ force = false } = {}) {
+  const draft = buildCurrentServiceDraft();
+  if (!draft) return;
+  if (force || shouldStoreCurrentDraft(draft)) {
+    upsertPendingServiceDraft(draft);
+    return;
+  }
+  removePendingServiceDraft(draft.service_id);
+}
+
+function getPendingServiceDraftsWithCurrent() {
+  const seen = new Set();
+  const drafts = [];
+
+  state.pendingServiceOrder.forEach((serviceId) => {
+    const draft = state.pendingServiceDrafts[serviceId];
+    if (!draft) return;
+    drafts.push(draft);
+    seen.add(String(draft.service_id));
+  });
+
+  const currentDraft = buildCurrentServiceDraft();
+  if (currentDraft && shouldStoreCurrentDraft(currentDraft)) {
+    const key = String(currentDraft.service_id);
+    if (seen.has(key)) {
+      const index = drafts.findIndex((item) => String(item.service_id) === key);
+      if (index >= 0) drafts[index] = currentDraft;
+    } else {
+      drafts.push(currentDraft);
+    }
+  }
+
+  return drafts;
+}
+
+function renderSelectedServicesSummary(drafts) {
+  if (!dom.genSelectedServices) return;
+  if (!drafts.length) {
+    dom.genSelectedServices.textContent = 'Vybrané služby: žádné';
+    return;
+  }
+  const labels = drafts.map((draft) => draft.service_name).join(' + ');
+  dom.genSelectedServices.textContent = `Vybrané služby: ${labels}`;
+}
+
+function resetVisitFields({ clearPending = true } = {}) {
+  if (clearPending) {
+    clearPendingServiceDrafts();
+  }
   dom.genPrice.value = '';
+  dom.genPrice.dataset.manual = '0';
   dom.genDate.value = todayLocal();
   dom.genWorker.value = getDefaultWorkerId();
   dom.genPaymentMethod.value = 'cash';
@@ -1479,7 +1607,8 @@ function resetVisitFields() {
     dom.genericSchemaFields.innerHTML = '';
   }
   dom.genSchemaExtras.value = '';
-  renderActiveSchemaFields();
+  renderSelectedServicesSummary([]);
+  renderActiveSchemaFields({});
   updateGenericPricePreview();
 }
 
@@ -1602,33 +1731,29 @@ async function createClient(selectService = false) {
 }
 
 function updateGenericPricePreview() {
-  const selectedService = state.settings.services.find((item) => item.id === state.selectedServiceId) || null;
-  const serviceBasePrice = Math.max(0, Number(selectedService?.price) || 0);
-  const schemaValues = collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema);
-  const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaValues);
-  const autoPrice = serviceBasePrice + schemaPrice;
+  const drafts = getPendingServiceDraftsWithCurrent();
+  const autoPrice = drafts.reduce((sum, item) => sum + Math.max(0, Number(item.auto_total) || 0), 0);
   dom.genSchemaExtras.value = formatCzk(autoPrice);
+  renderSelectedServicesSummary(drafts);
 
-  // "Celkem (ručně)" je finální cena. Pokud není vyplněná, předvyplníme automatickou cenu.
-  if (dom.genPrice.value === '' && autoPrice > 0) {
-    dom.genPrice.value = String(autoPrice);
+  const manualMode = dom.genPrice.dataset.manual === '1';
+  if (!manualMode) {
+    dom.genPrice.value = drafts.length ? String(autoPrice) : '';
+    dom.genPrice.dataset.manual = '0';
   }
 }
 
-function renderActiveSchemaFields() {
+function renderActiveSchemaFields(initialValues = {}) {
   const schema = state.selectedServiceSchema;
-  renderSchemaFields(dom.genericSchemaFields, schema, updateGenericPricePreview);
+  renderSchemaFields(dom.genericSchemaFields, schema, () => {
+    state.currentServiceTouched = true;
+    updateGenericPricePreview();
+  }, initialValues);
 }
 
 async function addGenericVisit() {
-  if (!state.selectedServiceId) {
+  if (!state.selectedServiceId && state.pendingServiceOrder.length === 0) {
     alert('Vyber službu.');
-    return;
-  }
-
-  const service = state.settings.services.find((item) => item.id === state.selectedServiceId);
-  if (!service) {
-    alert('Vybraná služba neexistuje.');
     return;
   }
 
@@ -1640,30 +1765,44 @@ async function addGenericVisit() {
     return;
   }
 
-  const schemaHasFields = !!(state.selectedServiceSchema && Array.isArray(state.selectedServiceSchema.fields) && state.selectedServiceSchema.fields.length);
-  const schemaData = schemaHasFields ? collectSchemaValues(dom.genericSchemaFields, state.selectedServiceSchema) : {};
-  const schemaPrice = computeSchemaExtras(state.selectedServiceSchema, schemaData);
-  const serviceBasePrice = Math.max(0, Number(service.price) || 0);
-  const autoPrice = serviceBasePrice + schemaPrice;
-
-  if (!dom.genPrice.value) {
-    if (autoPrice > 0) {
-      dom.genPrice.value = String(autoPrice);
-    } else {
-      alert('Vyplň cenu služby.');
-      return;
-    }
+  storeCurrentServiceDraft();
+  const drafts = getPendingServiceDraftsWithCurrent();
+  if (!drafts.length) {
+    alert('Vyber alespoň jednu službu.');
+    return;
   }
 
-  await api.post(`/api/clients/${clientId}/visits`, {
-    date: dom.genDate.value || todayLocal(),
-    service_id: state.selectedServiceId,
-    manual_total: dom.genPrice.value,
-    note: dom.genNote.value.trim(),
-    worker_id: dom.genWorker.value,
-    payment_method: dom.genPaymentMethod.value,
-    service_data: schemaData
-  });
+  const totalAuto = drafts.reduce((sum, item) => sum + Math.max(0, Number(item.auto_total) || 0), 0);
+  const finalTotalRaw = (dom.genPrice.value || '').toString().trim();
+  const finalTotal = finalTotalRaw === '' ? totalAuto : Number(finalTotalRaw);
+  if (!Number.isFinite(finalTotal) || finalTotal < 0) {
+    alert('Celková cena musí být číslo 0 nebo vyšší.');
+    return;
+  }
+
+  const totals = drafts.map((item) => Math.max(0, Number(item.auto_total) || 0));
+  const diff = finalTotal - totalAuto;
+  if (totals.length) {
+    const adjustedFirst = totals[0] + diff;
+    if (adjustedFirst < 0) {
+      alert('Celková cena je příliš nízká vůči vybraným službám.');
+      return;
+    }
+    totals[0] = adjustedFirst;
+  }
+
+  for (let index = 0; index < drafts.length; index += 1) {
+    const draft = drafts[index];
+    await api.post(`/api/clients/${clientId}/visits`, {
+      date: dom.genDate.value || todayLocal(),
+      service_id: draft.service_id,
+      manual_total: Math.round(totals[index]),
+      note: dom.genNote.value.trim(),
+      worker_id: dom.genWorker.value,
+      payment_method: dom.genPaymentMethod.value,
+      service_data: draft.service_data || {}
+    });
+  }
 
   resetVisitFields();
   await loadVisits(clientId);
@@ -4099,7 +4238,11 @@ function wireEvents() {
     });
   }
   dom.btnLogout.addEventListener('click', handleLogout);
-  dom.genPrice.addEventListener('input', updateGenericPricePreview);
+  dom.genPrice.addEventListener('input', () => {
+    const raw = (dom.genPrice.value || '').toString().trim();
+    dom.genPrice.dataset.manual = raw ? '1' : '0';
+    updateGenericPricePreview();
+  });
   document.addEventListener('click', (event) => {
     if (!dom.servicePicker) return;
     if (!dom.servicePicker.contains(event.target)) {
