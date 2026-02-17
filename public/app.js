@@ -1649,23 +1649,15 @@ function renderVisitGroupDetails(group) {
         .join('')}</div>`
       : '<div class="history-detail-empty">Bez zadaných kroků.</div>';
     const extrasTotal = detailSections.extras.reduce((sum, row) => sum + Math.max(0, Number(row.amount) || 0), 0);
-    const priceRows = [
-      `
-        <div class="history-detail-row history-detail-row-money">
-          <span class="history-detail-key">Cena služby</span>
-          <span>${formatCzk(visit.total)}</span>
-        </div>
-      `
-    ];
-    if (extrasTotal > 0) {
-      priceRows.push(`
+    const extrasValueLabel = extrasTotal > 0 ? `+ ${formatCzk(extrasTotal)}` : formatCzk(0);
+    const priceHtml = `
+      <div class="history-detail-grid">
         <div class="history-detail-row history-detail-row-money">
           <span class="history-detail-key">Cena zvolených možností</span>
-          <span>+ ${formatCzk(extrasTotal)}</span>
+          <span>${extrasValueLabel}</span>
         </div>
-      `);
-    }
-    const priceHtml = `<div class="history-detail-grid">${priceRows.join('')}</div>`;
+      </div>
+    `;
     const note = (visit.note || '').toString().trim();
     const noteHtml = note
       ? `<div class="history-detail-note">${escapeHtml(note)}</div>`
