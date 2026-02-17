@@ -632,7 +632,8 @@ button.primary:hover {
 
 .addon-list {
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
 }
 
 .addon-item {
@@ -640,10 +641,24 @@ button.primary:hover {
   align-items: center;
   justify-content: space-between;
   font-size: 13px;
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.addon-item-long {
+  grid-column: 1 / -1;
+}
+
+.addon-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .addon-item input {
-  margin-right: 8px;
+  margin-left: 8px;
 }
 
 .custom-fields {
@@ -1391,6 +1406,10 @@ button.primary:hover {
 
 @media (max-width: 860px) {
   .schema-split {
+    grid-template-columns: 1fr;
+  }
+
+  .addon-list {
     grid-template-columns: 1fr;
   }
 }

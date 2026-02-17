@@ -385,7 +385,11 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
         item.className = 'addon-item';
         const left = document.createElement('span');
         const price = formatSignedCzk(opt.price_delta);
-        left.textContent = price ? `${opt.label} (${price})` : opt.label;
+        const optionText = price ? `${opt.label} (${price})` : opt.label;
+        left.textContent = optionText;
+        if ((optionText || '').length > 35) {
+          item.classList.add('addon-item-long');
+        }
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.dataset.schemaField = field.id;
