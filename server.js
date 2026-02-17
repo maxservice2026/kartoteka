@@ -1434,7 +1434,7 @@ app.get('/api/pro-access', (req, res) => {
 
 app.get('/api/public/services', async (req, res) => {
   const services = await db.all(
-    'SELECT id, parent_id, name, duration_minutes, price FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
+    'SELECT id, parent_id, name, duration_minutes, price, form_schema_json FROM services WHERE active = 1 AND tenant_id = ? ORDER BY name',
     [req.tenant.id]
   );
   res.json({ services });
@@ -1454,14 +1454,44 @@ function parseSelectedServiceIds(rawServiceIds, rawServiceId) {
   return Array.from(new Set(ids));
 }
 
-async function resolveSelectedServices(serviceIds, tenantId) {
+function parseServiceOptionKey(rawKey) {
+  const normalized = (rawKey || '').toString().trim();
+  if (!normalized) return null;
+  const parts = normalized.split('::');
+  if (parts.length !== 2) return null;
+  const fieldId = (parts[0] || '').trim();
+  const optionId = (parts[1] || '').trim();
+  if (!fieldId || !optionId) return null;
+  return { key: normalized, fieldId, optionId };
+}
+
+function resolveServiceOptionByKey(serviceRow, rawOptionKey) {
+  const parsedKey = parseServiceOptionKey(rawOptionKey);
+  if (!parsedKey) return null;
+
+  const schema = parseServiceSchemaJson(serviceRow?.form_schema_json);
+  if (!schema || !Array.isArray(schema.fields)) return null;
+
+  const field = schema.fields.find((item) => item.id === parsedKey.fieldId && (item.type === 'select' || item.type === 'multiselect'));
+  if (!field) return null;
+  const option = (field.options || []).find((item) => item.id === parsedKey.optionId);
+  if (!option) return null;
+
+  return {
+    key: parsedKey.key,
+    label: `${field.label}: ${option.label}`,
+    duration_minutes: Math.max(0, toInt(option.duration_minutes, 0))
+  };
+}
+
+async function resolveSelectedServices(serviceIds, tenantId, optionSelection = {}) {
   if (!serviceIds.length) {
     return { error: 'Vyberte alespoň jednu službu.', status: 400 };
   }
   const placeholders = serviceIds.map(() => '?').join(', ');
   const params = [tenantId, ...serviceIds];
   const serviceRows = await db.all(
-    `SELECT id, name, duration_minutes, price FROM services WHERE active = 1 AND tenant_id = ? AND id IN (${placeholders})`,
+    `SELECT id, name, duration_minutes, price, form_schema_json FROM services WHERE active = 1 AND tenant_id = ? AND id IN (${placeholders})`,
     params
   );
   if (serviceRows.length !== serviceIds.length) {
@@ -1478,11 +1508,29 @@ async function resolveSelectedServices(serviceIds, tenantId) {
   }
 
   const serviceById = new Map(serviceRows.map((row) => [row.id, row]));
-  const duration = serviceIds.reduce((sum, id) => sum + Math.max(0, toInt(serviceById.get(id)?.duration_minutes, 0)), 0);
+  let duration = serviceIds.reduce((sum, id) => sum + Math.max(0, toInt(serviceById.get(id)?.duration_minutes, 0)), 0);
+  let selectedOption = null;
+
+  if (serviceIds.length === 1) {
+    const serviceId = serviceIds[0];
+    const optionKey = (optionSelection[serviceId] || optionSelection.default || '').toString().trim();
+    if (optionKey) {
+      const service = serviceById.get(serviceId);
+      const resolvedOption = resolveServiceOptionByKey(service, optionKey);
+      if (!resolvedOption) {
+        return { error: 'Vybraná minislužba není platná.', status: 400 };
+      }
+      selectedOption = resolvedOption;
+      if (resolvedOption.duration_minutes > 0) {
+        duration = resolvedOption.duration_minutes;
+      }
+    }
+  }
+
   if (duration <= 0) {
     return { error: 'Vybraná služba nemá časovou dotaci pro online rezervaci.', status: 400 };
   }
-  return { serviceRows, serviceById, duration };
+  return { serviceRows, serviceById, duration, selectedOption };
 }
 
 async function calculatePublicAvailability(tenantId, date, duration) {
@@ -1660,7 +1708,12 @@ async function calculatePublicAvailability(tenantId, date, duration) {
 app.get('/api/public/availability', async (req, res) => {
   const date = toDateOnly(req.query.date);
   const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
-  const selected = await resolveSelectedServices(serviceIds, req.tenant.id);
+  const optionKey = (req.query.option_key || '').toString().trim();
+  const optionSelection =
+    optionKey && serviceIds.length === 1
+      ? { [serviceIds[0]]: optionKey }
+      : {};
+  const selected = await resolveSelectedServices(serviceIds, req.tenant.id, optionSelection);
   if (selected.error) {
     return res.status(selected.status || 400).json({ error: selected.error });
   }
@@ -1678,7 +1731,12 @@ app.get('/api/public/availability-days', async (req, res) => {
     return res.status(400).json({ error: 'Neplatný měsíc.' });
   }
   const serviceIds = parseSelectedServiceIds(req.query.service_ids, req.query.service_id);
-  const selected = await resolveSelectedServices(serviceIds, req.tenant.id);
+  const optionKey = (req.query.option_key || '').toString().trim();
+  const optionSelection =
+    optionKey && serviceIds.length === 1
+      ? { [serviceIds[0]]: optionKey }
+      : {};
+  const selected = await resolveSelectedServices(serviceIds, req.tenant.id, optionSelection);
   if (selected.error) {
     return res.status(selected.status || 400).json({ error: selected.error });
   }
@@ -1710,12 +1768,17 @@ app.post('/api/public/reservations', async (req, res) => {
   const phone = (payload.phone || '').trim();
   const email = (payload.email || '').trim();
   const note = (payload.note || '').trim();
+  const optionKey = (payload.option_key || '').toString().trim();
 
   if (!uniqueServiceIds.length || !workerId || !date || !timeSlot || !clientName) {
     return res.status(400).json({ error: 'Vyplňte služby, termín a jméno.' });
   }
 
-  const selected = await resolveSelectedServices(uniqueServiceIds, req.tenant.id);
+  const optionSelection =
+    optionKey && uniqueServiceIds.length === 1
+      ? { [uniqueServiceIds[0]]: optionKey }
+      : {};
+  const selected = await resolveSelectedServices(uniqueServiceIds, req.tenant.id, optionSelection);
   if (selected.error) {
     return res.status(selected.status || 400).json({ error: selected.error });
   }
@@ -1789,10 +1852,17 @@ app.post('/api/public/reservations', async (req, res) => {
     }
   }
 
-  const finalNote =
-    serviceNames.length > 1
-      ? `[Služby: ${serviceNames.join(', ')}]${note ? ` ${note}` : ''}`
-      : note || null;
+  const noteParts = [];
+  if (serviceNames.length > 1) {
+    noteParts.push(`[Služby: ${serviceNames.join(', ')}]`);
+  }
+  if (selected.selectedOption?.label) {
+    noteParts.push(`[Minislužba: ${selected.selectedOption.label}]`);
+  }
+  if (note) {
+    noteParts.push(note);
+  }
+  const finalNote = noteParts.length ? noteParts.join(' ') : null;
 
   await db.run(
     `INSERT INTO reservations (id, tenant_id, date, time_slot, service_id, worker_id, duration_minutes, client_name, phone, email, note, created_at)
@@ -2946,6 +3016,47 @@ app.post('/api/clients/:id/visits', async (req, res) => {
   }
 
   res.json({ id });
+});
+
+app.put('/api/visits/worker', requireAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const workerId = (payload.worker_id || '').toString().trim();
+  const visitIds = Array.isArray(payload.visit_ids)
+    ? [...new Set(payload.visit_ids.map((id) => (id || '').toString().trim()).filter(Boolean))]
+    : [];
+
+  if (!workerId) return res.status(400).json({ error: 'worker_id is required' });
+  if (!visitIds.length) return res.status(400).json({ error: 'visit_ids is required' });
+
+  const worker = await db.get(
+    'SELECT id, full_name, tenant_id FROM users WHERE id = ? AND tenant_id = ? AND active = 1',
+    [workerId, req.tenant.id]
+  );
+  if (!worker) return res.status(400).json({ error: 'worker_id is invalid' });
+  await upsertWorker(worker.id, worker.full_name, 1, worker.tenant_id);
+
+  const placeholders = visitIds.map(() => '?').join(',');
+  const rows = await db.all(
+    `SELECT id FROM visits WHERE tenant_id = ? AND id IN (${placeholders})`,
+    [req.tenant.id, ...visitIds]
+  );
+  if (!rows.length) {
+    return res.status(404).json({ error: 'Záznamy návštěv nebyly nalezeny.' });
+  }
+
+  await db.run(
+    `UPDATE visits
+     SET worker_id = ?
+     WHERE tenant_id = ? AND id IN (${placeholders})`,
+    [workerId, req.tenant.id, ...visitIds]
+  );
+
+  res.json({
+    ok: true,
+    updated: rows.length,
+    worker_id: worker.id,
+    worker_name: worker.full_name
+  });
 });
 
 app.delete('/api/visits/:id', async (req, res) => {

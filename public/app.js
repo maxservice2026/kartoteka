@@ -88,6 +88,7 @@ const state = {
   pendingServiceOrder: [],
   pendingServiceDrafts: {},
   openVisitGroups: {},
+  visitWorkerChanges: {},
   auth: {
     token: null,
     user: null,
@@ -246,7 +247,14 @@ function parseServiceSchemaJson(schemaJson) {
           .map((opt) => ({
             id: (opt.id || '').toString().trim(),
             label: (opt.label || '').toString().trim(),
-            price_delta: Number(opt.price_delta) || 0
+            price_delta: Number(opt.price_delta) || 0,
+            duration_minutes: (() => {
+              const value = Number(opt.duration_minutes);
+              if (!Number.isFinite(value)) return 0;
+              if (value === 0) return 0;
+              if (value >= 15 && value <= 360 && value % 15 === 0) return value;
+              return 0;
+            })()
           }))
           .filter((opt) => opt.id && opt.label);
       } else {
@@ -391,7 +399,7 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
         const left = document.createElement('span');
         const optionText = formatOptionLabel(opt);
         left.textContent = optionText;
-        if ((optionText || '').length > 35) {
+        if ((optionText || '').length > 43) {
           item.classList.add('addon-item-long');
         }
         const checkbox = document.createElement('input');
@@ -1224,6 +1232,7 @@ async function loadClients() {
 async function loadVisits(clientId) {
   state.visits = clientId ? await api.get(`/api/clients/${clientId}/visits`) : [];
   state.openVisitGroups = {};
+  state.visitWorkerChanges = {};
   renderVisits();
 }
 
@@ -1504,7 +1513,9 @@ function renderVisits() {
         date: visit.date || '',
         created_at: visit.created_at || '',
         payment_method: visit.payment_method || 'cash',
+        worker_id: visit.worker_id || '',
         worker_name: visit.worker_name || '',
+        worker_mixed: false,
         note: visit.note || '',
         titles: []
       };
@@ -1514,6 +1525,16 @@ function renderVisits() {
 
     group.visits.push(visit);
     group.total += Math.max(0, Number(visit.total) || 0);
+    const visitWorkerId = (visit.worker_id || '').toString().trim();
+    const visitWorkerName = (visit.worker_name || '').toString().trim();
+    if (!group.worker_id && visitWorkerId) group.worker_id = visitWorkerId;
+    if (!group.worker_name && visitWorkerName) group.worker_name = visitWorkerName;
+    if (visitWorkerId && group.worker_id && visitWorkerId !== group.worker_id) group.worker_mixed = true;
+    if (visitWorkerName && group.worker_name && visitWorkerName !== group.worker_name) group.worker_mixed = true;
+    if (group.worker_mixed) {
+      group.worker_id = '';
+      group.worker_name = 'Více pracovníků';
+    }
     if (visit.created_at) {
       const current = Date.parse(group.created_at || '') || 0;
       const incoming = Date.parse(visit.created_at) || 0;
@@ -1532,8 +1553,17 @@ function renderVisits() {
 
   dom.visitsList.innerHTML = grouped
     .map((group) => {
+      const changeInfo = state.visitWorkerChanges[group.key];
+      if (changeInfo && changeInfo.new_worker_id !== group.worker_id) {
+        delete state.visitWorkerChanges[group.key];
+      }
+      const activeChange = state.visitWorkerChanges[group.key] || null;
       const title = group.titles.join(' + ') || 'Služba';
-      const worker = group.worker_name ? ` • ${group.worker_name}` : '';
+      const worker = activeChange
+        ? ` • <span class="history-worker-old">${escapeHtml(activeChange.old_worker_name || 'Neurčeno')}</span> <span class="history-worker-arrow">→</span> <span class="history-worker-new">${escapeHtml(activeChange.new_worker_name || 'Neurčeno')}</span>`
+        : group.worker_name
+          ? ` • ${escapeHtml(group.worker_name)}`
+          : '';
       const payment = group.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
       const savedTime = formatTimeOnly(group.created_at);
       const savedTimeLabel = savedTime ? ` • uloženo ${savedTime}` : '';
@@ -1541,6 +1571,20 @@ function renderVisits() {
       const noteLine = note ? `<div class="history-meta">${note}</div>` : '';
       const isOpen = Boolean(state.openVisitGroups[group.key]);
       const toggleLabel = isOpen ? 'Skrýt detail' : 'Otevřít detail';
+      const workerSelect = isOpen && state.auth.user?.role === 'admin'
+        ? `<label class="history-worker-select">
+            <span>Pracovník</span>
+            <select data-history-worker-group="${escapeHtml(group.key)}">
+              <option value="" ${group.worker_id ? '' : 'selected'}>— vyber pracovníka —</option>
+              ${state.settings.workers
+                .map((workerItem) => {
+                  const selected = workerItem.id === group.worker_id ? 'selected' : '';
+                  return `<option value="${workerItem.id}" ${selected}>${escapeHtml(workerItem.name)}</option>`;
+                })
+                .join('')}
+            </select>
+          </label>`
+        : '';
       return `
         <div class="history-card">
           <div class="history-title">
@@ -1551,6 +1595,7 @@ function renderVisits() {
           ${noteLine}
           <div class="history-actions">
             <button type="button" class="ghost history-toggle" data-history-group="${escapeHtml(group.key)}">${toggleLabel}</button>
+            ${workerSelect}
           </div>
           ${isOpen ? renderVisitGroupDetails(group) : ''}
         </div>
@@ -1564,6 +1609,48 @@ function renderVisits() {
       if (!key) return;
       state.openVisitGroups[key] = !state.openVisitGroups[key];
       renderVisits();
+    });
+  });
+
+  dom.visitsList.querySelectorAll('[data-history-worker-group]').forEach((selectEl) => {
+    selectEl.addEventListener('change', async () => {
+      const groupKey = selectEl.dataset.historyWorkerGroup || '';
+      const group = grouped.find((item) => item.key === groupKey);
+      if (!group) return;
+      const nextWorkerId = (selectEl.value || '').toString().trim();
+      if (!nextWorkerId) return;
+      const currentWorkerId = (group.worker_id || '').toString();
+      if (nextWorkerId === currentWorkerId) return;
+
+      const nextWorker = state.settings.workers.find((worker) => worker.id === nextWorkerId);
+      if (!nextWorker) return;
+
+      const oldWorkerName = state.visitWorkerChanges[groupKey]?.new_worker_name || group.worker_name || 'Neurčeno';
+      const visitIds = group.visits.map((visit) => visit.id).filter(Boolean);
+      if (!visitIds.length) return;
+
+      selectEl.disabled = true;
+      try {
+        await api.put('/api/visits/worker', { visit_ids: visitIds, worker_id: nextWorkerId });
+        const visitIdSet = new Set(visitIds);
+        state.visits = state.visits.map((visit) => {
+          if (!visitIdSet.has(visit.id)) return visit;
+          return {
+            ...visit,
+            worker_id: nextWorkerId,
+            worker_name: nextWorker.name
+          };
+        });
+        state.visitWorkerChanges[groupKey] = {
+          old_worker_name: oldWorkerName,
+          new_worker_name: nextWorker.name,
+          new_worker_id: nextWorkerId
+        };
+        renderVisits();
+      } catch (err) {
+        selectEl.disabled = false;
+        selectEl.value = currentWorkerId;
+      }
     });
   });
 }
@@ -1677,6 +1764,13 @@ function buildVisitDetailSections(visit) {
 function renderVisitGroupDetails(group) {
   const visits = Array.isArray(group.visits) ? group.visits : [];
   if (!visits.length) return '';
+  const workerChange = state.visitWorkerChanges[group.key] || null;
+  const workerChangeHtml = workerChange
+    ? `<div class="history-worker-change">
+        <span class="history-detail-key">Pracovník</span>
+        <span><span class="history-worker-old">${escapeHtml(workerChange.old_worker_name || 'Neurčeno')}</span> <span class="history-worker-arrow">→</span> <span class="history-worker-new">${escapeHtml(workerChange.new_worker_name || 'Neurčeno')}</span></span>
+      </div>`
+    : '';
 
   const items = visits.map((visit) => {
     const serviceName = visit.service_name || 'Služba';
@@ -1715,7 +1809,7 @@ function renderVisitGroupDetails(group) {
     `;
   });
 
-  return `<div class="history-detail-wrap">${items.join('')}</div>`;
+  return `<div class="history-detail-wrap">${workerChangeHtml}${items.join('')}</div>`;
 }
 
 function setFormValues(client) {
@@ -2190,22 +2284,50 @@ async function openCalendarModal() {
     )
     .join('');
 
-  let publicServices = [];
-  try {
-    const data = await api.get('/api/public/services');
-    publicServices = Array.isArray(data.services) ? data.services : [];
-  } catch (err) {
-    publicServices = [];
+  let servicesSource = Array.isArray(state.settings.services) ? state.settings.services : [];
+  if (!servicesSource.length) {
+    try {
+      const data = await api.get('/api/public/services');
+      servicesSource = Array.isArray(data.services) ? data.services : [];
+    } catch (err) {
+      servicesSource = [];
+    }
   }
-  const parentIds = new Set(publicServices.filter((service) => service.parent_id).map((service) => String(service.parent_id)));
-  const leafServices = publicServices
+  const parentIds = new Set(servicesSource.filter((service) => service.parent_id).map((service) => String(service.parent_id)));
+  const leafServices = servicesSource
     .filter((service) => !parentIds.has(String(service.id)))
     .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'cs'));
+  const bookingCatalog = leafServices.map((service) => {
+    const schema = parseServiceSchemaJson(service.form_schema_json);
+    const miniOptions = [];
+    if (schema && Array.isArray(schema.fields)) {
+      schema.fields.forEach((field) => {
+        if (field.type !== 'select' && field.type !== 'multiselect') return;
+        (field.options || []).forEach((option) => {
+          const optionId = (option.id || '').toString().trim();
+          const optionLabel = (option.label || '').toString().trim();
+          if (!optionId || !optionLabel) return;
+          miniOptions.push({
+            key: `${field.id}::${optionId}`,
+            label: `${field.label}: ${optionLabel}`,
+            duration_minutes: normalizeDurationMinutes(option.duration_minutes, 0)
+          });
+        });
+      });
+    }
+    return {
+      id: service.id,
+      name: service.name || 'Služba',
+      duration_minutes: normalizeDurationMinutes(service.duration_minutes, 0),
+      miniOptions
+    };
+  });
+  const bookingCatalogById = new Map(bookingCatalog.map((item) => [String(item.id), item]));
   const bookingServiceOptions = [
     '<option value="">Vyber službu</option>',
-    ...leafServices.map(
+    ...bookingCatalog.map(
       (service) =>
-        `<option value="${service.id}">${service.name} • ${normalizeDurationMinutes(service.duration_minutes, 0)} min</option>`
+        `<option value="${service.id}">${escapeHtml(service.name)} • ${normalizeDurationMinutes(service.duration_minutes, 0)} min</option>`
     )
   ].join('');
 
@@ -2218,17 +2340,23 @@ async function openCalendarModal() {
       <button class="ghost" id="closeModal">Zavřít</button>
     </div>
     <div class="modal-grid">
-      ${buildCalendarHtml(year, month, reservations)}
-      <div class="hint">Modrá tečka značí den s rezervací.</div>
-
       <div class="settings-section">
         <h3>Nová rezervace</h3>
-        <div class="meta">Nejprve vyber službu, pak den a čas.</div>
+        <div class="meta">Nejprve vyber službu (a případně minislužbu), pak den a čas.</div>
         <div class="field-row">
           <div class="field">
             <label>Služba</label>
             <select id="calendarBookingService">${bookingServiceOptions}</select>
           </div>
+          <div class="field">
+            <label>Minislužba (chatbox)</label>
+            <select id="calendarBookingVariant" disabled>
+              <option value="">Bez minislužby</option>
+            </select>
+            <div class="meta" id="calendarBookingVariantHint">Vyber službu.</div>
+          </div>
+        </div>
+        <div class="field-row">
           <div class="field">
             <label>Vybraný termín</label>
             <input type="text" id="calendarBookingPicked" value="" placeholder="Zatím nevybráno" readonly />
@@ -2261,6 +2389,9 @@ async function openCalendarModal() {
           <button class="primary" id="calendarBookingSave" disabled>Uložit rezervaci</button>
         </div>
       </div>
+
+      ${buildCalendarHtml(year, month, reservations)}
+      <div class="hint">Modrá tečka značí den s rezervací.</div>
 
       <div class="settings-section">
         <h3>Rezervace v měsíci</h3>
@@ -2336,12 +2467,16 @@ async function openCalendarModal() {
 
   const bookingState = {
     serviceId: '',
+    optionKey: '',
+    optionLabel: '',
     selectedDate: '',
     selectedSlot: null,
     mapYear: year,
     mapMonth: monthNumber
   };
   const bookingServiceSelect = document.getElementById('calendarBookingService');
+  const bookingVariantSelect = document.getElementById('calendarBookingVariant');
+  const bookingVariantHint = document.getElementById('calendarBookingVariantHint');
   const bookingDateMap = document.getElementById('calendarBookingDateMap');
   const bookingSlots = document.getElementById('calendarBookingSlots');
   const bookingSlotsHint = document.getElementById('calendarBookingSlotsHint');
@@ -2358,13 +2493,75 @@ async function openCalendarModal() {
     return `${dd}.${mm}.${yy}`;
   };
 
+  const getSelectedBookingService = () => bookingCatalogById.get(String(bookingState.serviceId)) || null;
+
+  const syncVariantSelect = () => {
+    const selectedService = getSelectedBookingService();
+    if (!selectedService) {
+      bookingVariantSelect.disabled = true;
+      bookingVariantSelect.innerHTML = '<option value="">Bez minislužby</option>';
+      bookingVariantHint.textContent = 'Vyber službu.';
+      bookingState.optionKey = '';
+      bookingState.optionLabel = '';
+      return;
+    }
+
+    const options = Array.isArray(selectedService.miniOptions) ? selectedService.miniOptions : [];
+    if (!options.length) {
+      bookingVariantSelect.disabled = true;
+      bookingVariantSelect.innerHTML = '<option value="">Bez minislužby</option>';
+      bookingVariantHint.textContent = 'Pro tuto službu nejsou nastavené minislužby.';
+      bookingState.optionKey = '';
+      bookingState.optionLabel = '';
+      return;
+    }
+
+    bookingVariantSelect.disabled = false;
+    bookingVariantSelect.innerHTML = [
+      `<option value="">Bez minislužby (${normalizeDurationMinutes(selectedService.duration_minutes, 0)} min)</option>`,
+      ...options.map((option) => {
+        const duration = normalizeDurationMinutes(option.duration_minutes, 0);
+        const suffix = duration > 0 ? ` • ${duration} min` : '';
+        return `<option value="${escapeHtml(option.key)}">${escapeHtml(option.label)}${suffix}</option>`;
+      })
+    ].join('');
+    bookingVariantHint.textContent = 'Volitelně vyber konkrétní minislužbu.';
+    bookingVariantSelect.value = '';
+    bookingState.optionKey = '';
+    bookingState.optionLabel = '';
+  };
+
+  const applySelectedVariant = () => {
+    const selectedService = getSelectedBookingService();
+    if (!selectedService) {
+      bookingState.optionKey = '';
+      bookingState.optionLabel = '';
+      return;
+    }
+    const selectedKey = (bookingVariantSelect.value || '').trim();
+    if (!selectedKey) {
+      bookingState.optionKey = '';
+      bookingState.optionLabel = '';
+      return;
+    }
+    const option = (selectedService.miniOptions || []).find((item) => item.key === selectedKey);
+    if (!option) {
+      bookingState.optionKey = '';
+      bookingState.optionLabel = '';
+      return;
+    }
+    bookingState.optionKey = option.key;
+    bookingState.optionLabel = option.label;
+  };
+
   const updatePickedLabel = () => {
     if (!bookingState.selectedDate || !bookingState.selectedSlot) {
       bookingPicked.value = '';
       return;
     }
+    const variantLabel = bookingState.optionLabel ? ` • ${bookingState.optionLabel}` : '';
     bookingPicked.value =
-      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}`;
+      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}${variantLabel}`;
   };
 
   const updateBookingSaveState = () => {
@@ -2480,6 +2677,9 @@ async function openCalendarModal() {
       month: String(bookingState.mapMonth),
       service_id: bookingState.serviceId
     });
+    if (bookingState.optionKey) {
+      params.set('option_key', bookingState.optionKey);
+    }
     const response = await fetch(`/api/public/availability-days?${params.toString()}`);
     if (!response.ok) {
       renderBookingDateMap([]);
@@ -2518,9 +2718,14 @@ async function openCalendarModal() {
       updateBookingSaveState();
       return;
     }
-    const response = await fetch(
-      `/api/public/availability?date=${encodeURIComponent(bookingState.selectedDate)}&service_id=${encodeURIComponent(bookingState.serviceId)}`
-    );
+    const params = new URLSearchParams({
+      date: bookingState.selectedDate,
+      service_id: bookingState.serviceId
+    });
+    if (bookingState.optionKey) {
+      params.set('option_key', bookingState.optionKey);
+    }
+    const response = await fetch(`/api/public/availability?${params.toString()}`);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       bookingState.selectedSlot = null;
@@ -2538,6 +2743,15 @@ async function openCalendarModal() {
 
   bookingServiceSelect.addEventListener('change', async () => {
     bookingState.serviceId = bookingServiceSelect.value || '';
+    syncVariantSelect();
+    bookingState.selectedDate = '';
+    bookingState.selectedSlot = null;
+    updatePickedLabel();
+    updateBookingSaveState();
+    await loadBookingDays();
+  });
+  bookingVariantSelect.addEventListener('change', async () => {
+    applySelectedVariant();
     bookingState.selectedDate = '';
     bookingState.selectedSlot = null;
     updatePickedLabel();
@@ -2555,6 +2769,7 @@ async function openCalendarModal() {
 
     await api.post('/api/public/reservations', {
       service_id: bookingState.serviceId,
+      option_key: bookingState.optionKey || null,
       date: bookingState.selectedDate,
       time: bookingState.selectedSlot.time_slot,
       worker_id: bookingState.selectedSlot.worker_id,
@@ -2594,6 +2809,9 @@ async function openCalendarModal() {
       alert('Dostupnost uložena.');
     });
   }
+
+  syncVariantSelect();
+  await loadBookingDays();
 }
 
 async function openEconomyModal() {
@@ -2858,6 +3076,50 @@ async function openEconomyModal() {
       }));
   }
 
+  function buildVisitsByWorkerAndDay(visits) {
+    const workerMap = new Map();
+    for (const visit of visits || []) {
+      const workerName = visit.worker_name || 'Neurčeno';
+      if (!workerMap.has(workerName)) {
+        workerMap.set(workerName, { worker_name: workerName, total: 0, days: new Map() });
+      }
+      const worker = workerMap.get(workerName);
+      const amount = Number(visit.total) || 0;
+      worker.total += amount;
+
+      const dayKey = String(visit.date || '');
+      if (!worker.days.has(dayKey)) {
+        worker.days.set(dayKey, { date: dayKey, total: 0, visits: [] });
+      }
+      const day = worker.days.get(dayKey);
+      day.total += amount;
+      day.visits.push(visit);
+    }
+
+    return Array.from(workerMap.values())
+      .sort((a, b) => String(a.worker_name).localeCompare(String(b.worker_name), 'cs'))
+      .map((worker) => ({
+        worker_name: worker.worker_name,
+        total: worker.total,
+        days: Array.from(worker.days.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      }));
+  }
+
+  function buildExpensesByDay(expenses) {
+    const dayMap = new Map();
+    for (const expense of expenses || []) {
+      const dayKey = String(expense.date || '');
+      if (!dayMap.has(dayKey)) {
+        dayMap.set(dayKey, { date: dayKey, total: 0, items: [] });
+      }
+      const day = dayMap.get(dayKey);
+      const amount = Number(expense.amount) || 0;
+      day.total += amount;
+      day.items.push(expense);
+    }
+    return Array.from(dayMap.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }
+
   async function loadEconomy() {
     const from = document.getElementById('ecoFrom').value;
     const to = document.getElementById('ecoTo').value;
@@ -2900,18 +3162,21 @@ async function openEconomyModal() {
       visits.innerHTML = grouped
         .map(
           (dayGroup) => `
-            <div class="eco-day-group">
-              <div class="settings-item eco-day-header">
-                <span>${formatDisplayDate(dayGroup.date)} • Celkem den</span>
+            <details class="eco-collapsible">
+              <summary class="settings-item eco-day-header">
+                <span>${formatDisplayDate(dayGroup.date)}</span>
                 <span>${formatCzk(dayGroup.total)}</span>
-              </div>
+              </summary>
+              <div class="eco-collapse-body">
               ${dayGroup.workers
                 .map(
                   (workerGroup) => `
-                    <div class="settings-item eco-worker-header">
-                      <span>${workerGroup.worker_name}</span>
-                      <span>${formatCzk(workerGroup.total)}</span>
-                    </div>
+                    <details class="eco-collapsible eco-collapsible-nested">
+                      <summary class="settings-item eco-worker-header">
+                        <span>${workerGroup.worker_name}</span>
+                        <span>${formatCzk(workerGroup.total)}</span>
+                      </summary>
+                      <div class="eco-collapse-body">
                     ${workerGroup.visits
                       .map(
                         (visit) => `
@@ -2922,10 +3187,13 @@ async function openEconomyModal() {
                         `
                       )
                       .join('')}
+                      </div>
+                    </details>
                   `
                 )
                 .join('')}
-            </div>
+              </div>
+            </details>
           `
         )
         .join('');
@@ -2935,27 +3203,73 @@ async function openEconomyModal() {
     if (!data.expenses.length) {
       expenses.innerHTML = '<div class="hint">V tomto období nejsou žádné výdaje.</div>';
     } else {
-      expenses.innerHTML = data.expenses
-        .map((expense) => `
-          <div class="settings-item">
-            <span>${expense.date} • ${expense.title}${expense.worker_name ? ` • ${expense.worker_name}` : ''}${expense.vat_rate ? ` • DPH ${expense.vat_rate}%` : ''}${expense.recurring_type && expense.recurring_type !== 'none' ? ` • ${recurringTypeLabel(expense.recurring_type)}` : ''}</span>
-            <span>${formatCzk(expense.amount)}</span>
-          </div>
-        `)
+      const groupedExpenses = buildExpensesByDay(data.expenses);
+      expenses.innerHTML = groupedExpenses
+        .map(
+          (day) => `
+            <details class="eco-collapsible">
+              <summary class="settings-item eco-day-header">
+                <span>${formatDisplayDate(day.date)}</span>
+                <span>${formatCzk(day.total)}</span>
+              </summary>
+              <div class="eco-collapse-body">
+                ${day.items
+                  .map(
+                    (expense) => `
+                      <div class="settings-item eco-expense-item">
+                        <span>${expense.title}${expense.worker_name ? ` • ${expense.worker_name}` : ''}${expense.vat_rate ? ` • DPH ${expense.vat_rate}%` : ''}${expense.recurring_type && expense.recurring_type !== 'none' ? ` • ${recurringTypeLabel(expense.recurring_type)}` : ''}</span>
+                        <span>${formatCzk(expense.amount)}</span>
+                      </div>
+                    `
+                  )
+                  .join('')}
+              </div>
+            </details>
+          `
+        )
         .join('');
     }
 
     const byWorker = document.getElementById('ecoByWorker');
     if (byWorker) {
-      if (!data.by_worker || !data.by_worker.length) {
+      const groupedByWorker = buildVisitsByWorkerAndDay(data.visits);
+      if (!groupedByWorker.length) {
         byWorker.innerHTML = '<div class="hint">Zatím žádná data podle pracovníka.</div>';
       } else {
-        byWorker.innerHTML = data.by_worker
+        byWorker.innerHTML = groupedByWorker
           .map((row) => `
-            <div class="settings-item">
-              <span>${row.worker_name || 'Neurčeno'}</span>
-              <span>${formatCzk(row.total)}</span>
-            </div>
+            <details class="eco-collapsible">
+              <summary class="settings-item eco-worker-header">
+                <span>${row.worker_name || 'Neurčeno'}</span>
+                <span>${formatCzk(row.total)}</span>
+              </summary>
+              <div class="eco-collapse-body">
+                ${row.days
+                  .map(
+                    (day) => `
+                      <details class="eco-collapsible eco-collapsible-nested">
+                        <summary class="settings-item eco-day-header">
+                          <span>${formatDisplayDate(day.date)}</span>
+                          <span>${formatCzk(day.total)}</span>
+                        </summary>
+                        <div class="eco-collapse-body">
+                          ${day.visits
+                            .map(
+                              (visit) => `
+                                <div class="settings-item eco-visit-item">
+                                  <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
+                                  <span>${formatCzk(visit.total)}</span>
+                                </div>
+                              `
+                            )
+                            .join('')}
+                        </div>
+                      </details>
+                    `
+                  )
+                  .join('')}
+              </div>
+            </details>
           `)
           .join('');
       }

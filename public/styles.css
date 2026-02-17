@@ -954,11 +954,53 @@ button.primary:hover {
 .history-actions {
   display: flex;
   justify-content: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .history-actions .history-toggle {
   padding: 8px 12px;
   font-size: 13px;
+}
+
+.history-worker-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.history-worker-select select {
+  min-width: 220px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-size: 13px;
+  color: #111;
+}
+
+.history-worker-change {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) 1fr;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.history-worker-old {
+  color: #c62828;
+  text-decoration: line-through;
+}
+
+.history-worker-new {
+  color: #1f7a38;
+  font-weight: 600;
+}
+
+.history-worker-arrow {
+  color: var(--muted);
 }
 
 .history-detail-wrap {
