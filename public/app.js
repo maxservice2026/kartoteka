@@ -1518,15 +1518,9 @@ function clearPendingServiceDrafts() {
   state.currentServiceTouched = false;
 }
 
-function hasSchemaSelectionValues(values) {
-  const entries = Object.values(values || {});
-  return entries.some((value) => {
-    if (Array.isArray(value)) return value.length > 0;
-    if (typeof value === 'boolean') return value;
-    if (value === null || value === undefined) return false;
-    if (typeof value === 'string') return value.trim() !== '';
-    return true;
-  });
+function isBillableDraft(draft) {
+  if (!draft) return false;
+  return Math.max(0, Number(draft.auto_total) || 0) > 0;
 }
 
 function buildCurrentServiceDraft() {
@@ -1544,8 +1538,7 @@ function buildCurrentServiceDraft() {
 }
 
 function shouldStoreCurrentDraft(draft) {
-  if (!draft) return false;
-  return Boolean(state.currentServiceTouched || hasSchemaSelectionValues(draft.service_data));
+  return isBillableDraft(draft);
 }
 
 function storeCurrentServiceDraft({ force = false } = {}) {
@@ -1564,7 +1557,7 @@ function getPendingServiceDraftsWithCurrent() {
 
   state.pendingServiceOrder.forEach((serviceId) => {
     const draft = state.pendingServiceDrafts[serviceId];
-    if (!draft) return;
+    if (!shouldStoreCurrentDraft(draft)) return;
     drafts.push(draft);
     seen.add(String(draft.service_id));
   });
@@ -1768,7 +1761,7 @@ async function addGenericVisit() {
   storeCurrentServiceDraft();
   const drafts = getPendingServiceDraftsWithCurrent();
   if (!drafts.length) {
-    alert('Vyber alespoň jednu službu.');
+    alert('Vyber alespoň jednu účtovanou službu.');
     return;
   }
 
