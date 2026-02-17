@@ -615,7 +615,7 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
     const priceWrap = document.createElement('div');
     priceWrap.className = 'field';
     const priceLabel = document.createElement('label');
-    priceLabel.textContent = 'Příplatek (Kč)';
+    priceLabel.textContent = 'Cena (Kč)';
     const priceInput = document.createElement('input');
     priceInput.type = 'number';
     priceInput.step = '1';
@@ -641,7 +641,7 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
 
       const optionTitle = document.createElement('div');
       optionTitle.className = 'custom-title';
-      optionTitle.textContent = 'Možnosti (s příplatkem)';
+      optionTitle.textContent = 'Možnosti (s cenou)';
       optionsWrap.appendChild(optionTitle);
 
       const options = Array.isArray(field.options) ? field.options : [];
@@ -669,7 +669,7 @@ function renderSchemaBuilder(container, schemaDraft, onChange) {
         const optPriceWrap = document.createElement('div');
         optPriceWrap.className = 'field';
         const optPriceLabel = document.createElement('label');
-        optPriceLabel.textContent = 'Příplatek (Kč)';
+        optPriceLabel.textContent = 'Cena (Kč)';
         const optPriceInput = document.createElement('input');
         optPriceInput.type = 'number';
         optPriceInput.step = '1';
