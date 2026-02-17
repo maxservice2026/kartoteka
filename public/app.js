@@ -397,8 +397,8 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
         const selected = Array.isArray(initialValues[field.id]) ? initialValues[field.id] : [];
         checkbox.checked = selected.includes(opt.id);
         checkbox.addEventListener('change', () => onChange && onChange());
-        item.appendChild(left);
         item.appendChild(checkbox);
+        item.appendChild(left);
         list.appendChild(item);
       });
       wrapper.appendChild(list);
