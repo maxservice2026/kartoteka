@@ -335,11 +335,6 @@ function renderSchemaFields(container, schema, onChange, initialValues = {}) {
   container.innerHTML = '';
   if (!schema || !Array.isArray(schema.fields) || !schema.fields.length) return;
 
-  const title = document.createElement('div');
-  title.className = 'custom-title';
-  title.textContent = 'Doplňující údaje';
-  container.appendChild(title);
-
   schema.fields.forEach((field) => {
     if (field.type === 'heading') {
       const heading = document.createElement('div');
