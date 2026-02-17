@@ -659,7 +659,13 @@ button.primary:hover {
 }
 
 .addon-item input {
-  margin: 0;
+  margin: 0 12px 0 0;
+  flex: 0 0 auto;
+}
+
+.custom-field-inline input[type="checkbox"] {
+  margin: 0 12px 0 0;
+  flex: 0 0 auto;
 }
 
 .custom-fields {
