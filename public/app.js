@@ -1534,6 +1534,7 @@ function parseJsonSafe(value, fallback = null) {
 
 function isEmptyServiceValue(value) {
   if (value === null || value === undefined) return true;
+  if (typeof value === 'boolean') return value === false;
   if (Array.isArray(value)) return value.length === 0;
   if (typeof value === 'string') return value.trim() === '';
   return false;
@@ -1559,11 +1560,14 @@ function formatServiceFieldValue(field, value) {
   return String(value);
 }
 
-function renderVisitServiceData(visit) {
+function buildVisitDetailSections(visit) {
   const data = parseJsonSafe(visit.service_data, {});
-  if (!data || typeof data !== 'object') return '';
+  if (!data || typeof data !== 'object') {
+    return { steps: [], extras: [] };
+  }
   const schema = parseServiceSchemaJson(visit.service_schema_json);
-  const rows = [];
+  const steps = [];
+  const extras = [];
   const usedKeys = new Set();
 
   if (schema && Array.isArray(schema.fields)) {
@@ -1573,12 +1577,41 @@ function renderVisitServiceData(visit) {
       if (isEmptyServiceValue(raw)) return;
       const value = formatServiceFieldValue(field, raw);
       if (!value) return;
-      rows.push(`
-        <div class="history-detail-row">
-          <span class="history-detail-key">${escapeHtml(field.label || field.id)}</span>
-          <span>${escapeHtml(value)}</span>
-        </div>
-      `);
+      steps.push({
+        key: field.label || field.id,
+        value
+      });
+
+      if ((field.type === 'checkbox' || field.type === 'number' || field.type === 'text' || field.type === 'textarea') && Number(field.price_delta) > 0) {
+        extras.push({
+          label: field.label || field.id,
+          amount: Number(field.price_delta) || 0
+        });
+      }
+
+      if (field.type === 'select') {
+        const option = (field.options || []).find((opt) => opt.id === String(raw));
+        if (option && Number(option.price_delta) > 0) {
+          extras.push({
+            label: `${field.label || field.id}: ${option.label}`,
+            amount: Number(option.price_delta) || 0
+          });
+        }
+      }
+
+      if (field.type === 'multiselect') {
+        const selected = Array.isArray(raw) ? raw : [];
+        selected.forEach((id) => {
+          const option = (field.options || []).find((opt) => opt.id === String(id));
+          if (option && Number(option.price_delta) > 0) {
+            extras.push({
+              label: `${field.label || field.id}: ${option.label}`,
+              amount: Number(option.price_delta) || 0
+            });
+          }
+        });
+      }
+
       usedKeys.add(field.id);
     });
   }
@@ -1587,16 +1620,13 @@ function renderVisitServiceData(visit) {
     if (usedKeys.has(key) || isEmptyServiceValue(raw)) return;
     const value = Array.isArray(raw) ? raw.join(', ') : String(raw);
     if (!value.trim()) return;
-    rows.push(`
-      <div class="history-detail-row">
-        <span class="history-detail-key">${escapeHtml(key)}</span>
-        <span>${escapeHtml(value)}</span>
-      </div>
-    `);
+    steps.push({
+      key,
+      value
+    });
   });
 
-  if (!rows.length) return '';
-  return `<div class="history-detail-grid">${rows.join('')}</div>`;
+  return { steps, extras };
 }
 
 function renderVisitGroupDetails(group) {
@@ -1607,18 +1637,49 @@ function renderVisitGroupDetails(group) {
     const serviceName = visit.service_name || 'Služba';
     const treatment = visit.treatment_name ? ` • ${visit.treatment_name}` : '';
     const title = `${serviceName}${treatment}`.trim();
-    const details = renderVisitServiceData(visit);
+    const detailSections = buildVisitDetailSections(visit);
+    const stepsHtml = detailSections.steps.length
+      ? `<div class="history-detail-grid">${detailSections.steps
+        .map((row) => `
+          <div class="history-detail-row">
+            <span class="history-detail-key">${escapeHtml(row.key)}</span>
+            <span>${escapeHtml(row.value)}</span>
+          </div>
+        `)
+        .join('')}</div>`
+      : '<div class="history-detail-empty">Bez zadaných kroků.</div>';
+    const extrasHtml = detailSections.extras.length
+      ? `<div class="history-detail-grid">${detailSections.extras
+        .map((row) => `
+          <div class="history-detail-row history-detail-row-money">
+            <span class="history-detail-key">${escapeHtml(row.label)}</span>
+            <span>+ ${formatCzk(row.amount)}</span>
+          </div>
+        `)
+        .join('')}</div>`
+      : '<div class="history-detail-empty">Bez příplatků.</div>';
     const note = (visit.note || '').toString().trim();
-    const noteHtml = note ? `<div class="history-meta">Poznámka: ${escapeHtml(note)}</div>` : '';
-    const detailsHtml = details || '<div class="history-meta">Bez doplňujících údajů.</div>';
+    const noteHtml = note
+      ? `<div class="history-detail-note">${escapeHtml(note)}</div>`
+      : '<div class="history-detail-empty">Bez poznámky.</div>';
     return `
       <div class="history-detail-item">
         <div class="history-detail-head">
           <span>${escapeHtml(title)}</span>
           <span>${formatCzk(visit.total)}</span>
         </div>
-        ${detailsHtml}
-        ${noteHtml}
+        <div class="history-detail-section">
+          <div class="history-detail-section-title">Použité kroky</div>
+          ${stepsHtml}
+        </div>
+        <div class="history-detail-section">
+          <div class="history-detail-section-title">Příplatky</div>
+          ${extrasHtml}
+        </div>
+        <div class="history-detail-section">
+          <div class="history-detail-section-title">Poznámka</div>
+          ${noteHtml}
+        </div>
       </div>
     `;
   });

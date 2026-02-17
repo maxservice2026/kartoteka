@@ -929,6 +929,19 @@ button.primary:hover {
   gap: 6px;
 }
 
+.history-detail-section {
+  display: grid;
+  gap: 6px;
+}
+
+.history-detail-section-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .history-detail-row {
   display: grid;
   grid-template-columns: minmax(140px, 220px) 1fr;
@@ -936,7 +949,21 @@ button.primary:hover {
   font-size: 13px;
 }
 
+.history-detail-row-money {
+  font-weight: 600;
+}
+
 .history-detail-key {
+  color: var(--muted);
+}
+
+.history-detail-note {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.history-detail-empty {
+  font-size: 12px;
   color: var(--muted);
 }
 
