@@ -2654,15 +2654,26 @@ async function openCalendarModal() {
     const slotList = timeSlots();
     const requiredSlots = Math.max(1, Math.ceil(Math.max(0, Number(bookingState.duration) || 0) / 30));
 
-    const highlightSelection = (workerId, startTime) => {
-      bookingSlots.querySelectorAll('.slot-button').forEach((item) => {
-        item.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
+    const clearSelectionHighlight = () => {
+      bookingSlots.querySelectorAll('.slot-entry').forEach((entry) => {
+        entry.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
       });
+      bookingSlots.querySelectorAll('.slot-button').forEach((button) => {
+        button.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
+      });
+      bookingSlots.querySelectorAll('.slot-worker-select').forEach((select) => {
+        select.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
+      });
+    };
+
+    const highlightSelection = (workerId, startTime) => {
+      clearSelectionHighlight();
 
       const startIndex = slotList.indexOf(startTime);
       if (startIndex === -1) return false;
 
       const workerSlots = baseByWorker.get(workerId)?.slots || new Map();
+      const markedEntries = [];
       let ok = true;
       for (let i = 0; i < requiredSlots; i += 1) {
         const slot = slotList[startIndex + i];
@@ -2671,9 +2682,17 @@ async function openCalendarModal() {
           ok = false;
           break;
         }
-        const cell = bookingSlots.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
-        if (cell) {
-          cell.classList.add('is-selected');
+        const entry = bookingSlots.querySelector(`.slot-entry[data-time="${slot}"]`);
+        if (entry) {
+          entry.classList.add('is-selected');
+          markedEntries.push(entry);
+          const select = entry.querySelector('.slot-worker-select');
+          if (select) {
+            const hasOption = Array.from(select.options).some((option) => option.value === workerId);
+            if (hasOption) {
+              select.value = workerId;
+            }
+          }
         }
       }
 
@@ -2684,8 +2703,25 @@ async function openCalendarModal() {
         ok = false;
       }
 
-      bookingSlots.querySelectorAll('.slot-button.is-selected').forEach((cell) => {
-        cell.classList.add(ok ? 'is-valid' : 'is-invalid');
+      markedEntries.forEach((entry, index) => {
+        entry.classList.add(ok ? 'is-valid' : 'is-invalid');
+        if (index === 0) {
+          entry.classList.add('active');
+        }
+        const button = entry.querySelector('.slot-button');
+        if (button) {
+          button.classList.add('is-selected', ok ? 'is-valid' : 'is-invalid');
+          if (index === 0) {
+            button.classList.add('active');
+          }
+        }
+        const select = entry.querySelector('.slot-worker-select');
+        if (select) {
+          select.classList.add('is-selected', ok ? 'is-valid' : 'is-invalid');
+          if (index === 0) {
+            select.classList.add('active');
+          }
+        }
       });
       return ok;
     };
@@ -2704,54 +2740,130 @@ async function openCalendarModal() {
     visibleTimes.forEach((timeSlot) => {
       const group = document.createElement('div');
       group.className = 'slot-time-group';
+      const entry = document.createElement('div');
+      entry.className = 'slot-entry';
+      entry.dataset.time = timeSlot;
 
-      workers.forEach((worker) => {
-        const slotMeta = baseByWorker.get(worker.id)?.slots.get(timeSlot);
+      const workersAtTime = workers
+        .map((worker) => {
+          const slotMeta = baseByWorker.get(worker.id)?.slots.get(timeSlot);
+          if (!slotMeta) {
+            return null;
+          }
+          const key = `${worker.id}:${timeSlot}`;
+          const isStart = Boolean(startByWorker.get(worker.id)?.has(timeSlot));
+          const blockedByRule = blockedSet.has(key) || !isStart;
+          const isReserved = Boolean(slotMeta.reserved);
+          return {
+            worker,
+            isReserved,
+            blockedByRule,
+            selectable: !isReserved && !blockedByRule
+          };
+        })
+        .filter(Boolean);
+
+      if (workersAtTime.length <= 1) {
+        const single = workersAtTime[0];
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'ghost slot-button';
-        button.dataset.workerId = worker.id;
         button.dataset.time = timeSlot;
 
-        if (!slotMeta) {
-          button.innerHTML = `<span class="slot-main">${timeSlot} • ${worker.name}</span>`;
+        if (!single) {
+          button.innerHTML = `<span class="slot-main">${timeSlot} • Není dostupné</span>`;
           button.classList.add('is-unavailable');
           button.disabled = true;
-          group.appendChild(button);
-          return;
-        }
-
-        if (slotMeta.reserved) {
-          button.innerHTML = `<span class="slot-main">${timeSlot} • <span class="slot-status">Obsazeno</span></span>`;
+          entry.appendChild(button);
         } else {
-          button.innerHTML = `<span class="slot-main">${timeSlot} • ${worker.name}</span>`;
+          const { worker, isReserved, blockedByRule, selectable } = single;
+          button.dataset.workerId = worker.id;
+          if (isReserved) {
+            button.innerHTML = `<span class="slot-main">${timeSlot} • <span class="slot-status">Obsazeno</span></span>`;
+            button.classList.add('is-reserved');
+            button.disabled = true;
+          } else {
+            button.innerHTML = `<span class="slot-main">${timeSlot} • ${worker.name}</span>`;
+            if (blockedByRule) {
+              button.classList.add('is-buffer');
+              button.disabled = true;
+            }
+          }
+          if (selectable) {
+            button.addEventListener('click', () => {
+              if (button.disabled) return;
+              bookingState.selectedSlot = {
+                worker_id: worker.id,
+                time_slot: timeSlot,
+                worker_name: worker.name
+              };
+              const valid = highlightSelection(worker.id, timeSlot);
+              updatePickedLabel();
+              bookingSave.disabled = !valid || !bookingName.value.trim();
+              bookingSlotsHint.textContent = valid ? '' : 'Vybraný čas nevyhovuje délce služby.';
+            });
+          }
+          entry.appendChild(button);
+        }
+      } else {
+        const select = document.createElement('select');
+        select.className = 'slot-worker-select';
+        select.dataset.time = timeSlot;
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = `${timeSlot} • Výběr pracovníka`;
+        placeholder.selected = true;
+        select.appendChild(placeholder);
+
+        let hasSelectable = false;
+        workersAtTime.forEach(({ worker, isReserved, blockedByRule, selectable }) => {
+          const option = document.createElement('option');
+          option.value = worker.id;
+          if (isReserved) {
+            option.textContent = `${timeSlot} • ${worker.name} — Obsazeno`;
+            option.disabled = true;
+          } else if (blockedByRule) {
+            option.textContent = `${timeSlot} • ${worker.name} — Nedostupné`;
+            option.disabled = true;
+          } else {
+            option.textContent = `${timeSlot} • ${worker.name}`;
+            hasSelectable = true;
+          }
+          select.appendChild(option);
+        });
+
+        if (!hasSelectable) {
+          select.disabled = true;
+          entry.classList.add('is-buffer');
         }
 
-        const key = `${worker.id}:${timeSlot}`;
-        const isStart = startByWorker.get(worker.id)?.has(timeSlot);
-        if (slotMeta.reserved) {
-          button.classList.add('is-reserved');
-          button.disabled = true;
-        } else if (blockedSet.has(key) || !isStart) {
-          button.classList.add('is-buffer');
-          button.disabled = true;
-        }
-
-        button.addEventListener('click', () => {
-          if (button.disabled) return;
+        select.addEventListener('change', () => {
+          const workerId = select.value;
+          if (!workerId) {
+            bookingState.selectedSlot = null;
+            clearSelectionHighlight();
+            updatePickedLabel();
+            updateBookingSaveState();
+            bookingSlotsHint.textContent = '';
+            return;
+          }
+          const worker = workers.find((item) => item.id === workerId);
           bookingState.selectedSlot = {
-            worker_id: worker.id,
+            worker_id: workerId,
             time_slot: timeSlot,
-            worker_name: worker.name
+            worker_name: worker?.name || 'Pracovník'
           };
-          const valid = highlightSelection(worker.id, timeSlot);
+          const valid = highlightSelection(workerId, timeSlot);
           updatePickedLabel();
           bookingSave.disabled = !valid || !bookingName.value.trim();
           bookingSlotsHint.textContent = valid ? '' : 'Vybraný čas nevyhovuje délce služby.';
         });
 
-        group.appendChild(button);
-      });
+        entry.appendChild(select);
+      }
+
+      group.appendChild(entry);
 
       bookingSlots.appendChild(group);
     });

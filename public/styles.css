@@ -1307,6 +1307,21 @@ button.primary:hover {
   gap: 8px;
 }
 
+.slot-entry {
+  display: block;
+}
+
+.slot-worker-select {
+  width: 100%;
+  min-height: 60px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 14px 46px 14px 18px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
 .slot-button.active {
   border-color: var(--accent);
   background: rgba(244, 114, 43, 0.12);
@@ -1357,6 +1372,24 @@ button.primary:hover {
   border-color: #d0422b;
   background: rgba(208, 66, 43, 0.16);
   color: #d0422b;
+}
+
+.slot-worker-select.is-valid {
+  border-color: #1f9a4c;
+  background: rgba(31, 154, 76, 0.18);
+  color: #1f9a4c;
+}
+
+.slot-worker-select.is-invalid {
+  border-color: #d0422b;
+  background: rgba(208, 66, 43, 0.16);
+  color: #d0422b;
+}
+
+.slot-worker-select:disabled {
+  border-style: dashed;
+  color: #9b9b9b;
+  background: rgba(148, 148, 148, 0.08);
 }
 
 .availability-section {
