@@ -2178,13 +2178,6 @@ function timeSlots() {
   return slots;
 }
 
-function sampleReservationsForMonth(year, month) {
-  const sampleDays = [2, 5, 8, 12, 14, 18, 21, 26];
-  return new Set(
-    sampleDays.map((day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
-  );
-}
-
 function buildCalendarHtml(year, month, reservations) {
   const firstDay = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -2231,7 +2224,7 @@ async function openCalendarModal() {
     const data = await api.get(`/api/reservations/calendar?year=${year}&month=${monthNumber}`);
     reservations = new Set(data.days || []);
   } catch (err) {
-    reservations = sampleReservationsForMonth(year, month);
+    reservations = new Set();
   }
 
   const canEditAvailability = state.auth.user?.role !== 'reception';
