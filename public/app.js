@@ -2307,7 +2307,7 @@ async function openCalendarModal() {
   });
   const bookingCatalogById = new Map(bookingCatalog.map((item) => [String(item.id), item]));
   const bookingServiceOptions = [
-    '<option value="">Vyber službu</option>',
+    '<option value="">Vyber službu (v dalším kroku vyberete konkrétní druh ošetření)</option>',
     ...bookingCatalog.map(
       (service) =>
         `<option value="${service.id}">${escapeHtml(service.name)} • ${normalizeDurationMinutes(service.duration_minutes, 0)} min</option>`
