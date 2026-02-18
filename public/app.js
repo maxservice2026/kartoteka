@@ -2599,10 +2599,12 @@ async function openCalendarModal() {
     );
   };
 
-  const renderBookingSlots = (slots, hintText = '') => {
+  const renderBookingSlots = (baseSlots, startSlots, blockedStarts, hintText = '') => {
     bookingSlots.innerHTML = '';
-    const available = Array.isArray(slots) ? slots : [];
-    if (!available.length) {
+    const base = Array.isArray(baseSlots) ? baseSlots : [];
+    const starts = Array.isArray(startSlots) ? startSlots : [];
+    const blocked = Array.isArray(blockedStarts) ? blockedStarts : [];
+    if (!base.length) {
       bookingSlotsHint.textContent = hintText || 'Pro vybraný den nejsou dostupné časy.';
       bookingSave.disabled = true;
       updatePickedLabel();
@@ -2610,17 +2612,104 @@ async function openCalendarModal() {
     }
 
     bookingSlotsHint.textContent = '';
-    available.forEach((slot) => {
+
+    const baseByWorker = new Map();
+    base.forEach((slot) => {
+      if (!baseByWorker.has(slot.worker_id)) {
+        baseByWorker.set(slot.worker_id, {
+          worker_name: slot.worker_name,
+          slots: new Map()
+        });
+      }
+      baseByWorker.get(slot.worker_id).slots.set(slot.time_slot, {
+        reserved: Boolean(slot.reserved)
+      });
+    });
+
+    const startByWorker = new Map();
+    starts.forEach((slot) => {
+      if (!startByWorker.has(slot.worker_id)) {
+        startByWorker.set(slot.worker_id, new Set());
+      }
+      startByWorker.get(slot.worker_id).add(slot.time_slot);
+    });
+
+    const blockedSet = new Set(blocked.map((item) => `${item.worker_id}:${item.time_slot}`));
+    const slotList = timeSlots();
+    const requiredSlots = Math.max(1, Math.ceil(Math.max(0, Number(bookingState.duration) || 0) / 30));
+
+    const highlightSelection = (workerId, startTime) => {
+      bookingSlots.querySelectorAll('.slot-button').forEach((item) => {
+        item.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
+      });
+
+      const startIndex = slotList.indexOf(startTime);
+      if (startIndex === -1) return false;
+
+      const workerSlots = baseByWorker.get(workerId)?.slots || new Map();
+      let ok = true;
+      for (let i = 0; i < requiredSlots; i += 1) {
+        const slot = slotList[startIndex + i];
+        const slotMeta = slot ? workerSlots.get(slot) : null;
+        if (!slot || !slotMeta || slotMeta.reserved) {
+          ok = false;
+          break;
+        }
+        const cell = bookingSlots.querySelector(`.slot-button[data-worker-id="${workerId}"][data-time="${slot}"]`);
+        if (cell) {
+          cell.classList.add('is-selected');
+        }
+      }
+
+      if (blockedSet.has(`${workerId}:${startTime}`)) {
+        ok = false;
+      }
+      if (!startByWorker.get(workerId)?.has(startTime)) {
+        ok = false;
+      }
+
+      bookingSlots.querySelectorAll('.slot-button.is-selected').forEach((cell) => {
+        cell.classList.add(ok ? 'is-valid' : 'is-invalid');
+      });
+      return ok;
+    };
+
+    base.forEach((slot) => {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'ghost slot-button';
-      button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name || 'Pracovník'}</span>`;
+      button.dataset.workerId = slot.worker_id;
+      button.dataset.time = slot.time_slot;
+
+      if (slot.reserved) {
+        button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`;
+      } else {
+        button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name || 'Pracovník'}</span>`;
+      }
+
+      const isStart = startByWorker.get(slot.worker_id)?.has(slot.time_slot);
+      if (slot.reserved) {
+        button.classList.add('is-reserved');
+        button.disabled = true;
+      } else if (blockedSet.has(`${slot.worker_id}:${slot.time_slot}`)) {
+        button.classList.add('is-buffer');
+        button.disabled = true;
+      } else if (!isStart) {
+        button.classList.add('is-buffer');
+        button.disabled = true;
+      }
+
       button.addEventListener('click', () => {
+        if (button.disabled) return;
         bookingState.selectedSlot = slot;
-        bookingSlots.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
-        button.classList.add('active');
+        const valid = highlightSelection(slot.worker_id, slot.time_slot);
         updatePickedLabel();
-        updateBookingSaveState();
+        bookingSave.disabled = !valid || !bookingName.value.trim();
+        if (!valid) {
+          bookingSlotsHint.textContent = 'Vybraný čas nevyhovuje délce služby.';
+        } else {
+          bookingSlotsHint.textContent = '';
+        }
       });
       bookingSlots.appendChild(button);
     });
@@ -2771,14 +2860,19 @@ async function openCalendarModal() {
       bookingState.selectedSlot = null;
       updatePickedLabel();
       updateBookingSaveState();
-      renderBookingSlots([], data.error || 'Nepodařilo se načíst dostupné časy.');
+      renderBookingSlots([], [], [], data.error || 'Nepodařilo se načíst dostupné časy.');
       return;
     }
     const data = await response.json();
     bookingState.selectedSlot = null;
     updatePickedLabel();
     updateBookingSaveState();
-    renderBookingSlots(data.slots || [], 'Pro vybraný den nejsou dostupné časy.');
+    renderBookingSlots(
+      data.base_slots || data.slots || [],
+      data.slots || [],
+      data.blocked_starts || [],
+      'Pro vybraný den nejsou dostupné časy.'
+    );
   };
 
   bookingServiceSelect.addEventListener('change', async () => {
