@@ -3376,23 +3376,59 @@ async function openEconomyModal() {
     return Number.isFinite(fallback) ? fallback : 0;
   }
 
+  function visitShareLabel(visit, amountField = 'total') {
+    const workerShare = Math.max(0, Math.min(100, Number.parseInt(visit?.worker_share_percent, 10) || 100));
+    const workerRole = String(visit?.worker_role || 'worker').toLowerCase();
+    const currentUserRole = String(state.auth?.user?.role || '');
+    const currentUserId = String(state.auth?.user?.id || '');
+    const visitWorkerId = String(visit?.worker_id || '');
+
+    if (amountField === 'worker_amount') {
+      return `Podíl ${workerShare}%`;
+    }
+
+    if (amountField === 'income_for_current_user' && currentUserRole === 'admin') {
+      if (workerRole === 'worker' && visitWorkerId && visitWorkerId !== currentUserId) {
+        return `Podíl ${100 - workerShare}%`;
+      }
+      return 'Podíl 100%';
+    }
+
+    if (workerRole === 'worker') {
+      return `Podíl ${workerShare}%`;
+    }
+    return 'Podíl 100%';
+  }
+
+  function incomeAmountColumnHtml(grossAmount, splitAmount, splitLabel = 'Podíl') {
+    return `
+      <span class="eco-amount-column">
+        <span class="eco-amount-main">${formatCzk(grossAmount)}</span>
+        <span class="eco-amount-sub">${splitLabel}: ${formatCzk(splitAmount)}</span>
+      </span>
+    `;
+  }
+
   function buildVisitsByDayAndWorker(visits, amountField = 'total') {
     const dayMap = new Map();
     for (const visit of visits || []) {
       const dayKey = String(visit.date || '');
       if (!dayMap.has(dayKey)) {
-        dayMap.set(dayKey, { date: dayKey, total: 0, workers: new Map() });
+        dayMap.set(dayKey, { date: dayKey, total: 0, total_gross: 0, workers: new Map() });
       }
       const dayGroup = dayMap.get(dayKey);
       const visitTotal = visitAmountByField(visit, amountField);
+      const visitGross = visitAmountByField(visit, 'total');
       dayGroup.total += visitTotal;
+      dayGroup.total_gross += visitGross;
 
       const workerName = visit.worker_name || 'Neurčeno';
       if (!dayGroup.workers.has(workerName)) {
-        dayGroup.workers.set(workerName, { worker_name: workerName, total: 0, visits: [] });
+        dayGroup.workers.set(workerName, { worker_name: workerName, total: 0, total_gross: 0, visits: [] });
       }
       const workerGroup = dayGroup.workers.get(workerName);
       workerGroup.total += visitTotal;
+      workerGroup.total_gross += visitGross;
       workerGroup.visits.push(visit);
     }
 
@@ -3401,6 +3437,7 @@ async function openEconomyModal() {
       .map((day) => ({
         date: day.date,
         total: day.total,
+        total_gross: day.total_gross,
         workers: Array.from(day.workers.values()).sort((a, b) =>
           String(a.worker_name).localeCompare(String(b.worker_name), 'cs')
         )
@@ -3412,18 +3449,21 @@ async function openEconomyModal() {
     for (const visit of visits || []) {
       const workerName = visit.worker_name || 'Neurčeno';
       if (!workerMap.has(workerName)) {
-        workerMap.set(workerName, { worker_name: workerName, total: 0, days: new Map() });
+        workerMap.set(workerName, { worker_name: workerName, total: 0, total_gross: 0, days: new Map() });
       }
       const worker = workerMap.get(workerName);
       const amount = visitAmountByField(visit, amountField);
+      const amountGross = visitAmountByField(visit, 'total');
       worker.total += amount;
+      worker.total_gross += amountGross;
 
       const dayKey = String(visit.date || '');
       if (!worker.days.has(dayKey)) {
-        worker.days.set(dayKey, { date: dayKey, total: 0, visits: [] });
+        worker.days.set(dayKey, { date: dayKey, total: 0, total_gross: 0, visits: [] });
       }
       const day = worker.days.get(dayKey);
       day.total += amount;
+      day.total_gross += amountGross;
       day.visits.push(visit);
     }
 
@@ -3432,6 +3472,7 @@ async function openEconomyModal() {
       .map((worker) => ({
         worker_name: worker.worker_name,
         total: worker.total,
+        total_gross: worker.total_gross,
         days: Array.from(worker.days.values()).sort((a, b) => String(b.date).localeCompare(String(a.date)))
       }));
   }
@@ -3496,7 +3537,7 @@ async function openEconomyModal() {
             <details class="eco-collapsible">
               <summary class="settings-item eco-day-header">
                 <span>${formatDisplayDate(dayGroup.date)}</span>
-                <span>${formatCzk(dayGroup.total)}</span>
+                ${incomeAmountColumnHtml(dayGroup.total_gross, dayGroup.total)}
               </summary>
               <div class="eco-collapse-body">
               ${dayGroup.workers
@@ -3505,7 +3546,7 @@ async function openEconomyModal() {
                     <details class="eco-collapsible eco-collapsible-nested">
                       <summary class="settings-item eco-worker-header">
                         <span>${workerGroup.worker_name}</span>
-                        <span>${formatCzk(workerGroup.total)}</span>
+                        ${incomeAmountColumnHtml(workerGroup.total_gross, workerGroup.total)}
                       </summary>
                       <div class="eco-collapse-body">
                     ${workerGroup.visits
@@ -3513,7 +3554,11 @@ async function openEconomyModal() {
                         (visit) => `
                           <div class="settings-item eco-visit-item">
                             <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
-                            <span>${formatCzk(visitAmountByField(visit, 'income_for_current_user'))}</span>
+                            ${incomeAmountColumnHtml(
+                              visitAmountByField(visit, 'total'),
+                              visitAmountByField(visit, 'income_for_current_user'),
+                              visitShareLabel(visit, 'income_for_current_user')
+                            )}
                           </div>
                         `
                       )
@@ -3572,7 +3617,7 @@ async function openEconomyModal() {
             <details class="eco-collapsible">
               <summary class="settings-item eco-worker-header">
                 <span>${row.worker_name || 'Neurčeno'}</span>
-                <span>${formatCzk(row.total)}</span>
+                ${incomeAmountColumnHtml(row.total_gross, row.total)}
               </summary>
               <div class="eco-collapse-body">
                 ${row.days
@@ -3581,7 +3626,7 @@ async function openEconomyModal() {
                       <details class="eco-collapsible eco-collapsible-nested">
                         <summary class="settings-item eco-day-header">
                           <span>${formatDisplayDate(day.date)}</span>
-                          <span>${formatCzk(day.total)}</span>
+                          ${incomeAmountColumnHtml(day.total_gross, day.total)}
                         </summary>
                         <div class="eco-collapse-body">
                           ${day.visits
@@ -3589,7 +3634,11 @@ async function openEconomyModal() {
                               (visit) => `
                                 <div class="settings-item eco-visit-item">
                                   <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
-                                  <span>${formatCzk(visitAmountByField(visit, 'worker_amount'))}</span>
+                                  ${incomeAmountColumnHtml(
+                                    visitAmountByField(visit, 'total'),
+                                    visitAmountByField(visit, 'worker_amount'),
+                                    visitShareLabel(visit, 'worker_amount')
+                                  )}
                                 </div>
                               `
                             )
