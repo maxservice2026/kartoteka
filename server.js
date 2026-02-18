@@ -162,6 +162,12 @@ function toInt(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function normalizeIncomeSharePercent(value, fallback = 100) {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) return Math.max(0, Math.min(100, toInt(fallback, 100)));
+  return Math.max(0, Math.min(100, parsed));
+}
+
 function toFloat(value, fallback = 0) {
   const n = Number.parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
@@ -659,6 +665,7 @@ async function initDb() {
       username TEXT NOT NULL,
       full_name TEXT NOT NULL,
       role TEXT NOT NULL,
+      income_share_percent INTEGER NOT NULL DEFAULT 100,
       is_superadmin INTEGER NOT NULL DEFAULT 0,
       password_hash TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1,
@@ -847,6 +854,7 @@ async function initDb() {
   await ensureColumn('users', 'tenant_id', 'TEXT');
   await ensureColumn('users', 'is_superadmin', 'INTEGER DEFAULT 0');
   await ensureColumn('users', 'calendar_services_configured', 'INTEGER DEFAULT 0');
+  await ensureColumn('users', 'income_share_percent', 'INTEGER DEFAULT 100');
   await ensureColumn('workers', 'tenant_id', 'TEXT');
   await ensureColumn('sessions', 'tenant_id', 'TEXT');
   await ensureColumn('services', 'tenant_id', 'TEXT');
@@ -903,6 +911,7 @@ async function initDb() {
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
   await db.run('UPDATE users SET is_superadmin = 0 WHERE is_superadmin IS NULL');
   await db.run('UPDATE users SET calendar_services_configured = 0 WHERE calendar_services_configured IS NULL');
+  await db.run('UPDATE users SET income_share_percent = 100 WHERE income_share_percent IS NULL');
   await db.run('UPDATE tenants SET active = 1 WHERE active IS NULL');
   await db.run('UPDATE tenants SET updated_at = created_at WHERE updated_at IS NULL');
   await db.run('UPDATE inventory_items SET unit = ? WHERE unit IS NULL OR unit = ?', ['ks', '']);
@@ -2459,7 +2468,7 @@ app.put('/api/stock/service-usage/:serviceId', requireAdmin, requireFeature('inv
 
 app.get('/api/users', requireAdmin, async (req, res) => {
   const users = await db.all(
-    'SELECT id, username, full_name, role, is_superadmin, active FROM users WHERE active = 1 AND tenant_id = ? ORDER BY full_name',
+    'SELECT id, username, full_name, role, is_superadmin, active, COALESCE(income_share_percent, 100) as income_share_percent FROM users WHERE active = 1 AND tenant_id = ? ORDER BY full_name',
     [req.tenant.id]
   );
   res.json(users);
@@ -2471,6 +2480,7 @@ app.post('/api/users', requireAdmin, async (req, res) => {
   const fullName = (payload.full_name || '').trim();
   const password = (payload.password || '').trim();
   const role = payload.role === 'admin' ? 'admin' : payload.role === 'reception' ? 'reception' : 'worker';
+  const incomeSharePercent = normalizeIncomeSharePercent(payload.income_share_percent, 100);
 
   if (!username || !fullName || !password) {
     return res.status(400).json({ error: 'Vyplňte jméno, uživatelské jméno a heslo.' });
@@ -2480,8 +2490,8 @@ app.post('/api/users', requireAdmin, async (req, res) => {
   const now = nowIso();
   try {
     await db.run(
-      'INSERT INTO users (id, tenant_id, username, full_name, role, is_superadmin, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, req.tenant.id, username, fullName, role, 0, hashPassword(password), now]
+      'INSERT INTO users (id, tenant_id, username, full_name, role, income_share_percent, is_superadmin, password_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, req.tenant.id, username, fullName, role, incomeSharePercent, 0, hashPassword(password), now]
     );
   } catch (err) {
     return res.status(400).json({ error: 'Uživatelské jméno už existuje.' });
@@ -2508,6 +2518,10 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
       : payload.role === 'reception'
         ? 'reception'
         : existing.role;
+  const incomeSharePercent = normalizeIncomeSharePercent(
+    payload.income_share_percent,
+    toInt(existing.income_share_percent, 100)
+  );
   const password = (payload.password || '').trim();
 
   if (!username || !fullName) {
@@ -2525,8 +2539,8 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
 
   try {
     await db.run(
-      'UPDATE users SET username = ?, full_name = ?, role = ?, password_hash = ? WHERE id = ? AND tenant_id = ?',
-      [username, fullName, role, passwordHash, existing.id, existing.tenant_id]
+      'UPDATE users SET username = ?, full_name = ?, role = ?, income_share_percent = ?, password_hash = ? WHERE id = ? AND tenant_id = ?',
+      [username, fullName, role, incomeSharePercent, passwordHash, existing.id, existing.tenant_id]
     );
   } catch (err) {
     return res.status(400).json({ error: 'Uživatelské jméno už existuje.' });
@@ -3361,19 +3375,6 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
   const workerFilter = role === 'worker' ? req.user.id : (req.query.worker_id || null);
   const myWorkerId = req.user.id;
 
-  const myVisitsWhere = ['v.date BETWEEN ? AND ?', 'v.worker_id = ?', 'v.tenant_id = ?'];
-  const myVisitsParams = [range.from, range.to, myWorkerId, req.tenant.id];
-  if (serviceFilter) {
-    myVisitsWhere.push('v.service_id = ?');
-    myVisitsParams.push(serviceFilter);
-  }
-  const myVisits = await db.all(
-    `SELECT v.total
-     FROM visits v
-     WHERE ${myVisitsWhere.join(' AND ')}`,
-    myVisitsParams
-  );
-
   const myExpensesRaw = await db.all(
     `SELECT e.*
      FROM expenses e
@@ -3381,9 +3382,32 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
     [myWorkerId, req.tenant.id, range.to]
   );
   const myExpenses = expandExpenses(myExpensesRaw, range.from, range.to);
-
-  const incomeTotal = myVisits.reduce((sum, row) => sum + toInt(row.total, 0), 0);
   const expenseTotal = myExpenses.reduce((sum, row) => sum + toInt(row.amount, 0), 0);
+
+  const computeVisitRevenueSplit = (visit) => {
+    const gross = Math.max(0, toInt(visit.total, 0));
+    const workerRole = String(visit.worker_role || 'worker').toLowerCase();
+    const configuredShare = normalizeIncomeSharePercent(visit.worker_share_percent, 100);
+    const effectiveShare = workerRole === 'worker' ? configuredShare : 100;
+    const workerAmount = Math.round((gross * effectiveShare) / 100);
+    const ownerAmount = gross - workerAmount;
+
+    let incomeForCurrentUser = 0;
+    if (role === 'worker') {
+      incomeForCurrentUser = workerAmount;
+    } else if (role === 'admin') {
+      const isOwnVisit = String(visit.worker_id || '') === String(req.user.id || '');
+      incomeForCurrentUser = ownerAmount + (isOwnVisit ? workerAmount : 0);
+    }
+
+    return {
+      ...visit,
+      worker_share_percent: effectiveShare,
+      worker_amount: workerAmount,
+      owner_amount: ownerAmount,
+      income_for_current_user: incomeForCurrentUser
+    };
+  };
 
   const visitsWhere = ['v.date BETWEEN ? AND ?', 'v.tenant_id = ?'];
   const visitsParams = [range.from, range.to, req.tenant.id];
@@ -3399,6 +3423,8 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
   const visits = await db.all(
     `SELECT v.*, c.full_name as client_name, t.name as treatment_name,
             COALESCE(u.full_name, w.name) as worker_name,
+            COALESCE(u.role, 'worker') as worker_role,
+            COALESCE(u.income_share_percent, 100) as worker_share_percent,
             s.name as service_name
      FROM visits v
      LEFT JOIN clients c ON v.client_id = c.id
@@ -3411,6 +3437,8 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
     ,
     visitsParams
   );
+  const visitsWithSplit = visits.map(computeVisitRevenueSplit);
+  const incomeTotal = visitsWithSplit.reduce((sum, row) => sum + toInt(row.income_for_current_user, 0), 0);
 
   const expensesRaw = await db.all(
     `SELECT e.*, COALESCE(u.full_name, w.name) as worker_name
@@ -3469,24 +3497,33 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
   const monthlyIncomeLast6 = [];
   const monthWindows = lastSixMonthsFrom(range.to);
   for (const monthItem of monthWindows) {
-    const monthWhere = ['date BETWEEN ? AND ?', 'tenant_id = ?'];
+    const monthWhere = ['v.date BETWEEN ? AND ?', 'v.tenant_id = ?'];
     const monthParams = [monthItem.from, monthItem.to, req.tenant.id];
     if (workerFilter) {
-      monthWhere.push('worker_id = ?');
+      monthWhere.push('v.worker_id = ?');
       monthParams.push(workerFilter);
     }
     if (serviceFilter) {
-      monthWhere.push('service_id = ?');
+      monthWhere.push('v.service_id = ?');
       monthParams.push(serviceFilter);
     }
     const monthRows = await db.all(
-      `SELECT total FROM visits WHERE ${monthWhere.join(' AND ')}`,
+      `SELECT v.worker_id, v.total,
+              COALESCE(u.role, 'worker') as worker_role,
+              COALESCE(u.income_share_percent, 100) as worker_share_percent
+       FROM visits v
+       LEFT JOIN users u ON v.worker_id = u.id
+       WHERE ${monthWhere.join(' AND ')}`,
       monthParams
     );
     monthlyIncomeLast6.push({
       key: monthItem.key,
       label: monthItem.label,
-      total: monthRows.reduce((sum, row) => sum + toInt(row.total, 0), 0)
+      total: role === 'admin'
+        ? monthRows.reduce((sum, row) => sum + toInt(row.total, 0), 0)
+        : monthRows
+          .map(computeVisitRevenueSplit)
+          .reduce((sum, row) => sum + toInt(row.income_for_current_user, 0), 0)
     });
   }
 
@@ -3499,7 +3536,7 @@ app.get('/api/economy', requireEconomyAccess, requireFeature('economy'), async (
     },
     monthly_income_last6: monthlyIncomeLast6,
     totals_all_income: totalsAllIncome,
-    visits,
+    visits: visitsWithSplit,
     expenses,
     by_worker: byWorker
   });

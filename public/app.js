@@ -3369,7 +3369,14 @@ async function openEconomyModal() {
     return `${day}.${month}.${year}`;
   };
 
-  function buildVisitsByDayAndWorker(visits) {
+  function visitAmountByField(visit, amountField = 'total') {
+    const fromField = Number(visit?.[amountField]);
+    if (Number.isFinite(fromField)) return fromField;
+    const fallback = Number(visit?.total);
+    return Number.isFinite(fallback) ? fallback : 0;
+  }
+
+  function buildVisitsByDayAndWorker(visits, amountField = 'total') {
     const dayMap = new Map();
     for (const visit of visits || []) {
       const dayKey = String(visit.date || '');
@@ -3377,7 +3384,7 @@ async function openEconomyModal() {
         dayMap.set(dayKey, { date: dayKey, total: 0, workers: new Map() });
       }
       const dayGroup = dayMap.get(dayKey);
-      const visitTotal = Number(visit.total) || 0;
+      const visitTotal = visitAmountByField(visit, amountField);
       dayGroup.total += visitTotal;
 
       const workerName = visit.worker_name || 'Neurčeno';
@@ -3400,7 +3407,7 @@ async function openEconomyModal() {
       }));
   }
 
-  function buildVisitsByWorkerAndDay(visits) {
+  function buildVisitsByWorkerAndDay(visits, amountField = 'total') {
     const workerMap = new Map();
     for (const visit of visits || []) {
       const workerName = visit.worker_name || 'Neurčeno';
@@ -3408,7 +3415,7 @@ async function openEconomyModal() {
         workerMap.set(workerName, { worker_name: workerName, total: 0, days: new Map() });
       }
       const worker = workerMap.get(workerName);
-      const amount = Number(visit.total) || 0;
+      const amount = visitAmountByField(visit, amountField);
       worker.total += amount;
 
       const dayKey = String(visit.date || '');
@@ -3482,7 +3489,7 @@ async function openEconomyModal() {
     if (!data.visits.length) {
       visits.innerHTML = '<div class="hint">V tomto období nejsou žádná ošetření.</div>';
     } else {
-      const grouped = buildVisitsByDayAndWorker(data.visits);
+      const grouped = buildVisitsByDayAndWorker(data.visits, 'income_for_current_user');
       visits.innerHTML = grouped
         .map(
           (dayGroup) => `
@@ -3506,7 +3513,7 @@ async function openEconomyModal() {
                         (visit) => `
                           <div class="settings-item eco-visit-item">
                             <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
-                            <span>${formatCzk(visit.total)}</span>
+                            <span>${formatCzk(visitAmountByField(visit, 'income_for_current_user'))}</span>
                           </div>
                         `
                       )
@@ -3556,7 +3563,7 @@ async function openEconomyModal() {
 
     const byWorker = document.getElementById('ecoByWorker');
     if (byWorker) {
-      const groupedByWorker = buildVisitsByWorkerAndDay(data.visits);
+      const groupedByWorker = buildVisitsByWorkerAndDay(data.visits, 'worker_amount');
       if (!groupedByWorker.length) {
         byWorker.innerHTML = '<div class="hint">Zatím žádná data podle pracovníka.</div>';
       } else {
@@ -3582,7 +3589,7 @@ async function openEconomyModal() {
                               (visit) => `
                                 <div class="settings-item eco-visit-item">
                                   <span>${visit.client_name || 'Klientka'} • ${visit.service_name || 'Služba'}${visit.treatment_name ? ` • ${visit.treatment_name}` : ''}</span>
-                                  <span>${formatCzk(visit.total)}</span>
+                                  <span>${formatCzk(visitAmountByField(visit, 'worker_amount'))}</span>
                                 </div>
                               `
                             )
@@ -4847,6 +4854,7 @@ function renderSettingsTabContent(tabKey) {
         '<div class="field"><label>Jméno</label><input type="text" data-field="full_name" /></div>',
         '<div class="field"><label>Uživatelské jméno</label><input type="text" data-field="username" /></div>',
         '<div class="field"><label>Role</label><select data-field="role"><option value="worker">Pracovník</option><option value="reception">Recepční</option><option value="admin">Administrátor</option></select></div>',
+        '<div class="field"><label>Podíl pracovníka (%)</label><input type="number" data-field="income_share_percent" min="0" max="100" step="1" value="100" /></div>',
         '<div class="field"><label>Heslo</label><input type="password" data-field="password" placeholder="Nové heslo" /></div>'
       ]
     });
@@ -5067,9 +5075,12 @@ function settingsItemTemplate(item, suffix = '', section = '') {
 function userItemTemplate(user) {
   const roleLabel = user.role === 'admin' ? 'Administrátor' : user.role === 'reception' ? 'Recepční' : 'Pracovník';
   const superLabel = user.is_superadmin ? ' • Super admin' : '';
+  const shareLabel = user.role === 'worker'
+    ? ` • podíl pracovníka ${Math.max(0, Math.min(100, Number.parseInt(user.income_share_percent, 10) || 100))}%`
+    : '';
   return `
     <div class="settings-item">
-      <span>${user.full_name} • ${user.username} • ${roleLabel}${superLabel}</span>
+      <span>${user.full_name} • ${user.username} • ${roleLabel}${shareLabel}${superLabel}</span>
       <div class="settings-actions">
         <button class="ghost" data-action="edit" data-section="users" data-id="${user.id}">Upravit</button>
         <button class="ghost" data-action="delete" data-section="users" data-id="${user.id}">Smazat</button>
@@ -5229,6 +5240,8 @@ function wireSettingsForms() {
       form.querySelectorAll('[data-field]').forEach((input) => {
         if (input.tagName === 'SELECT') {
           input.value = input.querySelector('option')?.value || '';
+        } else if (input.dataset.field === 'income_share_percent') {
+          input.value = '100';
         } else {
           input.value = '';
         }
@@ -5395,6 +5408,10 @@ function startEditUser(id) {
   form.querySelectorAll('[data-field]').forEach((input) => {
     if (input.dataset.field === 'password') {
       input.value = '';
+      return;
+    }
+    if (input.dataset.field === 'income_share_percent') {
+      input.value = String(Math.max(0, Math.min(100, Number.parseInt(user.income_share_percent, 10) || 100)));
       return;
     }
     const value = user[input.dataset.field] ?? '';
