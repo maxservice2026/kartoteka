@@ -36,6 +36,7 @@ const dom = {
   btnNew: document.getElementById('btnNew'),
   btnSave: document.getElementById('btnSave'),
   btnAddGeneric: document.getElementById('btnAddGeneric'),
+  btnAddGenericCalendar: document.getElementById('btnAddGenericCalendar'),
   btnSettings: document.getElementById('btnSettings'),
   btnEconomy: document.getElementById('btnEconomy'),
   btnInventory: document.getElementById('btnInventory'),
@@ -2066,22 +2067,23 @@ function renderActiveSchemaFields(initialValues = {}) {
 async function addGenericVisit() {
   if (!state.selectedServiceId && state.pendingServiceOrder.length === 0) {
     alert('Vyber službu.');
-    return;
+    return null;
   }
 
   const clientId = await saveClient();
-  if (!clientId) return;
+  if (!clientId) return null;
+  const clientName = (dom.fullName.value || '').toString().trim();
 
   if (!dom.genWorker.value) {
     alert('Vyber pracovníka pro ekonomiku.');
-    return;
+    return null;
   }
 
   storeCurrentServiceDraft();
   const drafts = getPendingServiceDraftsWithCurrent();
   if (!drafts.length) {
     alert('Vyber alespoň jednu účtovanou službu.');
-    return;
+    return null;
   }
 
   const totalAuto = drafts.reduce((sum, item) => sum + Math.max(0, Number(item.auto_total) || 0), 0);
@@ -2089,7 +2091,7 @@ async function addGenericVisit() {
   const finalTotal = finalTotalRaw === '' ? totalAuto : Number(finalTotalRaw);
   if (!Number.isFinite(finalTotal) || finalTotal < 0) {
     alert('Celková cena musí být číslo 0 nebo vyšší.');
-    return;
+    return null;
   }
 
   const totals = drafts.map((item) => Math.max(0, Number(item.auto_total) || 0));
@@ -2098,7 +2100,7 @@ async function addGenericVisit() {
     const adjustedFirst = totals[0] + diff;
     if (adjustedFirst < 0) {
       alert('Celková cena je příliš nízká vůči vybraným službám.');
-      return;
+      return null;
     }
     totals[0] = adjustedFirst;
   }
@@ -2122,6 +2124,17 @@ async function addGenericVisit() {
   resetVisitFields();
   await loadVisits(clientId);
   await loadSummary();
+  return { clientId, clientName };
+}
+
+async function addGenericVisitAndPickCalendar() {
+  const result = await addGenericVisit();
+  if (!result) return;
+  await runProFeature('calendar', () =>
+    openCalendarModal({
+      prefillClientName: result.clientName
+    })
+  );
 }
 
 function openModal(contentHtml, modalClass = '') {
@@ -2226,7 +2239,8 @@ function buildCalendarHtml(year, month, reservations) {
   `;
 }
 
-async function openCalendarModal() {
+async function openCalendarModal(options = {}) {
+  const prefillClientName = (options.prefillClientName || '').toString().trim();
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -2494,6 +2508,10 @@ async function openCalendarModal() {
   const bookingPhone = document.getElementById('calendarBookingPhone');
   const bookingEmail = document.getElementById('calendarBookingEmail');
   const bookingNote = document.getElementById('calendarBookingNote');
+
+  if (prefillClientName) {
+    bookingName.value = prefillClientName;
+  }
 
   const displayDate = (isoDate) => {
     const [yy, mm, dd] = String(isoDate || '').split('-');
@@ -5421,6 +5439,9 @@ function wireEvents() {
   dom.btnCreateClientAndService.addEventListener('click', () => createClient(true));
   dom.btnSave.addEventListener('click', saveClient);
   dom.btnAddGeneric.addEventListener('click', addGenericVisit);
+  if (dom.btnAddGenericCalendar) {
+    dom.btnAddGenericCalendar.addEventListener('click', addGenericVisitAndPickCalendar);
+  }
   if (dom.btnToggleClient) {
     dom.btnToggleClient.addEventListener('click', () => {
       const isHidden = dom.clientDetails?.classList.contains('hidden');
