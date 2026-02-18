@@ -1378,6 +1378,17 @@ button.primary:hover {
   padding-right: 4px;
 }
 
+.availability-services {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.checkbox-pill-service {
+  justify-content: flex-start;
+}
+
 .checkbox-pill {
   display: inline-flex;
   align-items: center;

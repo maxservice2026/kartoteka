@@ -729,6 +729,15 @@ async function initDb() {
       created_at TEXT NOT NULL,
       FOREIGN KEY (worker_id) REFERENCES users(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS worker_services (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      worker_id TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (worker_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (service_id) REFERENCES services(id)
+    );
     CREATE TABLE IF NOT EXISTS reservations (
       id TEXT PRIMARY KEY,
       tenant_id TEXT,
@@ -837,6 +846,7 @@ async function initDb() {
   await ensureColumn('tenants', 'updated_at', 'TEXT');
   await ensureColumn('users', 'tenant_id', 'TEXT');
   await ensureColumn('users', 'is_superadmin', 'INTEGER DEFAULT 0');
+  await ensureColumn('users', 'calendar_services_configured', 'INTEGER DEFAULT 0');
   await ensureColumn('workers', 'tenant_id', 'TEXT');
   await ensureColumn('sessions', 'tenant_id', 'TEXT');
   await ensureColumn('services', 'tenant_id', 'TEXT');
@@ -844,6 +854,7 @@ async function initDb() {
   await ensureColumn('visits', 'tenant_id', 'TEXT');
   await ensureColumn('expenses', 'tenant_id', 'TEXT');
   await ensureColumn('availability', 'tenant_id', 'TEXT');
+  await ensureColumn('worker_services', 'tenant_id', 'TEXT');
   await ensureColumn('reservations', 'tenant_id', 'TEXT');
   await ensureColumn('clones', 'tenant_id', 'TEXT');
   await ensureColumn('clones', 'domain', 'TEXT');
@@ -891,6 +902,7 @@ async function initDb() {
   await db.run('UPDATE reservations SET duration_minutes = 30 WHERE duration_minutes IS NULL');
   await db.run("UPDATE expenses SET recurring_type = 'none' WHERE recurring_type IS NULL");
   await db.run('UPDATE users SET is_superadmin = 0 WHERE is_superadmin IS NULL');
+  await db.run('UPDATE users SET calendar_services_configured = 0 WHERE calendar_services_configured IS NULL');
   await db.run('UPDATE tenants SET active = 1 WHERE active IS NULL');
   await db.run('UPDATE tenants SET updated_at = created_at WHERE updated_at IS NULL');
   await db.run('UPDATE inventory_items SET unit = ? WHERE unit IS NULL OR unit = ?', ['ks', '']);
@@ -916,6 +928,7 @@ async function initDb() {
   await db.run('UPDATE visits SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE expenses SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE availability SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
+  await db.run('UPDATE worker_services SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE reservations SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE clones SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE inventory_items SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
@@ -934,6 +947,7 @@ async function initDb() {
 
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenant_features_tenant_feature_key_idx ON tenant_features (tenant_id, feature_key)');
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS service_inventory_usage_unique_idx ON service_inventory_usage (tenant_id, service_id, item_id)');
+  await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS worker_services_unique_idx ON worker_services (tenant_id, worker_id, service_id)');
 
   const cloneRows = await db.all('SELECT id, name, slug, domain, tenant_id FROM clones WHERE active = 1');
   for (const clone of cloneRows) {
@@ -1548,7 +1562,7 @@ async function resolveSelectedServices(serviceIds, tenantId, optionSelection = {
   return { serviceRows, serviceById, duration, selectedOptions };
 }
 
-async function calculatePublicAvailability(tenantId, date, duration) {
+async function calculatePublicAvailability(tenantId, date, duration, selectedServiceIds = []) {
   const day = weekdayIndex(date);
   if (day === null) {
     return { error: 'Neplatné datum.', status: 400 };
@@ -1557,6 +1571,41 @@ async function calculatePublicAvailability(tenantId, date, duration) {
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
   const slotList = timeSlots();
   const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
+  const requestedServiceIds = Array.from(
+    new Set((Array.isArray(selectedServiceIds) ? selectedServiceIds : []).map((id) => String(id)).filter(Boolean))
+  );
+  const workerConfigRows = await db.all(
+    `SELECT id, COALESCE(calendar_services_configured, 0) AS calendar_services_configured
+     FROM users
+     WHERE active = 1 AND tenant_id = ?`,
+    [tenantId]
+  );
+  const workerServiceRows = await db.all(
+    requestedServiceIds.length
+      ? `SELECT worker_id, service_id
+         FROM worker_services
+         WHERE tenant_id = ? AND service_id IN (${requestedServiceIds.map(() => '?').join(',')})`
+      : 'SELECT worker_id, service_id FROM worker_services WHERE tenant_id = ?',
+    requestedServiceIds.length ? [tenantId, ...requestedServiceIds] : [tenantId]
+  );
+  const configuredByWorker = new Map(
+    workerConfigRows.map((row) => [String(row.id), toInt(row.calendar_services_configured, 0) === 1])
+  );
+  const servicesByWorker = new Map();
+  workerServiceRows.forEach((row) => {
+    const workerId = String(row.worker_id || '');
+    const serviceId = String(row.service_id || '');
+    if (!workerId || !serviceId) return;
+    if (!servicesByWorker.has(workerId)) servicesByWorker.set(workerId, new Set());
+    servicesByWorker.get(workerId).add(serviceId);
+  });
+  const canWorkerDoSelectedServices = (workerIdRaw) => {
+    const workerId = String(workerIdRaw || '');
+    if (!workerId || requestedServiceIds.length === 0) return true;
+    if (!configuredByWorker.get(workerId)) return true;
+    const selectedSet = servicesByWorker.get(workerId) || new Set();
+    return requestedServiceIds.every((serviceId) => selectedSet.has(serviceId));
+  };
 
   const slots = await db.all(
     `SELECT a.time_slot, a.worker_id, u.full_name as worker_name
@@ -1581,9 +1630,11 @@ async function calculatePublicAvailability(tenantId, date, duration) {
   const reservedByWorker = new Map();
   const workerNameById = new Map();
   slots.forEach((slot) => {
+    if (!canWorkerDoSelectedServices(slot.worker_id)) return;
     workerNameById.set(slot.worker_id, slot.worker_name);
   });
   reserved.forEach((row) => {
+    if (!canWorkerDoSelectedServices(row.worker_id)) return;
     const startIndex = slotIndex[row.time_slot];
     if (startIndex === undefined) return;
     if (row.worker_name) {
@@ -1604,6 +1655,7 @@ async function calculatePublicAvailability(tenantId, date, duration) {
 
   const availableByWorker = new Map();
   slots.forEach((slot) => {
+    if (!canWorkerDoSelectedServices(slot.worker_id)) return;
     if (!availableByWorker.has(slot.worker_id)) {
       availableByWorker.set(slot.worker_id, {
         worker_name: slot.worker_name,
@@ -1732,7 +1784,12 @@ app.get('/api/public/availability', async (req, res) => {
   if (selected.error) {
     return res.status(selected.status || 400).json({ error: selected.error });
   }
-  const availability = await calculatePublicAvailability(req.tenant.id, date, selected.duration);
+  const availability = await calculatePublicAvailability(
+    req.tenant.id,
+    date,
+    selected.duration,
+    selected.serviceRows.map((row) => row.id)
+  );
   if (availability.error) {
     return res.status(availability.status || 400).json({ error: availability.error });
   }
@@ -1760,7 +1817,12 @@ app.get('/api/public/availability-days', async (req, res) => {
   const days = [];
   for (let day = 1; day <= lastDay; day += 1) {
     const date = `${year}-${pad2(month)}-${pad2(day)}`;
-    const availability = await calculatePublicAvailability(req.tenant.id, date, selected.duration);
+    const availability = await calculatePublicAvailability(
+      req.tenant.id,
+      date,
+      selected.duration,
+      selected.serviceRows.map((row) => row.id)
+    );
     if (!availability.error && availability.slots.length > 0) {
       days.push(day);
     }
@@ -1810,6 +1872,22 @@ app.post('/api/public/reservations', async (req, res) => {
 
   const worker = await db.get('SELECT id FROM users WHERE id = ? AND tenant_id = ? AND active = 1', [workerId, req.tenant.id]);
   if (!worker) return res.status(400).json({ error: 'Pracovník není platný.' });
+  const workerConfig = await db.get(
+    'SELECT COALESCE(calendar_services_configured, 0) AS calendar_services_configured FROM users WHERE id = ? AND tenant_id = ?',
+    [workerId, req.tenant.id]
+  );
+  if (toInt(workerConfig?.calendar_services_configured, 0) === 1) {
+    const placeholders = uniqueServiceIds.map(() => '?').join(',');
+    const allowedRows = await db.all(
+      `SELECT service_id FROM worker_services WHERE tenant_id = ? AND worker_id = ? AND service_id IN (${placeholders})`,
+      [req.tenant.id, workerId, ...uniqueServiceIds]
+    );
+    const allowedSet = new Set(allowedRows.map((row) => String(row.service_id || '')));
+    const missingService = uniqueServiceIds.find((id) => !allowedSet.has(id));
+    if (missingService) {
+      return res.status(400).json({ error: 'Vybraný pracovník tuto službu neprovádí.' });
+    }
+  }
 
   const day = weekdayIndex(date);
   if (day === null) return res.status(400).json({ error: 'Neplatné datum.' });
@@ -1961,9 +2039,23 @@ app.get('/api/availability', requireFeature('calendar'), async (req, res) => {
     'SELECT day_of_week, time_slot FROM availability WHERE worker_id = ? AND tenant_id = ?',
     [req.user.id, req.tenant.id]
   );
+  const workerServiceRows = await db.all(
+    'SELECT service_id FROM worker_services WHERE worker_id = ? AND tenant_id = ?',
+    [req.user.id, req.tenant.id]
+  );
+  const workerRow = await db.get(
+    'SELECT full_name, COALESCE(calendar_services_configured, 0) AS calendar_services_configured FROM users WHERE id = ? AND tenant_id = ?',
+    [req.user.id, req.tenant.id]
+  );
   const days = Array.from(new Set(rows.map((row) => row.day_of_week))).sort();
   const times = Array.from(new Set(rows.map((row) => row.time_slot))).sort();
-  res.json({ days, times });
+  res.json({
+    days,
+    times,
+    worker_name: workerRow?.full_name || req.user.full_name,
+    service_ids: workerServiceRows.map((row) => String(row.service_id || '')).filter(Boolean),
+    services_configured: toInt(workerRow?.calendar_services_configured, 0) === 1
+  });
 });
 
 app.post('/api/availability', requireFeature('calendar'), async (req, res) => {
@@ -1974,10 +2066,24 @@ app.post('/api/availability', requireFeature('calendar'), async (req, res) => {
   const payload = req.body || {};
   const rawDays = Array.isArray(payload.days) ? payload.days : [];
   const rawTimes = Array.isArray(payload.times) ? payload.times : [];
+  const rawServiceIds = Array.isArray(payload.service_ids) ? payload.service_ids : [];
   const days = Array.from(new Set(rawDays.map((day) => toInt(day, -1)).filter((day) => day >= 0 && day <= 6)));
   const times = Array.from(new Set(rawTimes.map((time) => String(time)).filter((time) => time)));
+  const serviceIds = Array.from(new Set(rawServiceIds.map((id) => String(id || '').trim()).filter(Boolean)));
+
+  if (serviceIds.length) {
+    const placeholders = serviceIds.map(() => '?').join(',');
+    const existing = await db.all(
+      `SELECT id FROM services WHERE tenant_id = ? AND id IN (${placeholders})`,
+      [req.tenant.id, ...serviceIds]
+    );
+    if (existing.length !== serviceIds.length) {
+      return res.status(400).json({ error: 'Některé služby nejsou platné.' });
+    }
+  }
 
   await db.run('DELETE FROM availability WHERE worker_id = ? AND tenant_id = ?', [req.user.id, req.tenant.id]);
+  await db.run('DELETE FROM worker_services WHERE worker_id = ? AND tenant_id = ?', [req.user.id, req.tenant.id]);
 
   const now = nowIso();
   for (const day of days) {
@@ -1988,6 +2094,16 @@ app.post('/api/availability', requireFeature('calendar'), async (req, res) => {
       );
     }
   }
+  for (const serviceId of serviceIds) {
+    await db.run(
+      'INSERT INTO worker_services (id, tenant_id, worker_id, service_id, created_at) VALUES (?, ?, ?, ?, ?)',
+      [newId(), req.tenant.id, req.user.id, serviceId, now]
+    );
+  }
+  await db.run(
+    'UPDATE users SET calendar_services_configured = 1 WHERE id = ? AND tenant_id = ?',
+    [req.user.id, req.tenant.id]
+  );
 
   res.json({ ok: true });
 });
@@ -2007,12 +2123,7 @@ app.get('/api/reservations/calendar', requireFeature('calendar'), async (req, re
     'SELECT date FROM reservations WHERE date BETWEEN ? AND ? AND tenant_id = ? GROUP BY date',
     [start, end, req.tenant.id]
   );
-  let days = rows.map((row) => row.date);
-
-  if (!days.length && month === 2) {
-    days = [2, 5, 8, 12, 14, 18, 21, 26].map((day) => `${year}-${pad2(month)}-${pad2(day)}`);
-  }
-
+  const days = rows.map((row) => row.date);
   res.json({ days });
 });
 
@@ -3468,6 +3579,7 @@ app.get('/api/backup', requireSuperAdmin, async (req, res) => {
     workers: await db.all('SELECT * FROM workers'),
     users: await db.all('SELECT * FROM users'),
     availability: await db.all('SELECT * FROM availability'),
+    worker_services: await db.all('SELECT * FROM worker_services'),
     clients: await db.all('SELECT * FROM clients'),
     visits: await db.all('SELECT * FROM visits'),
     expenses: await db.all('SELECT * FROM expenses'),
@@ -3498,6 +3610,7 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'inventory_items',
     'reservations',
     'availability',
+    'worker_services',
     'visits',
     'clients',
     'users',
@@ -3520,6 +3633,7 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'workers',
     'users',
     'availability',
+    'worker_services',
     'clients',
     'visits',
     'expenses',

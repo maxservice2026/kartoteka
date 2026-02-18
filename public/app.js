@@ -2306,6 +2306,18 @@ async function openCalendarModal() {
         `<option value="${service.id}">${escapeHtml(service.name)} • ${normalizeDurationMinutes(service.duration_minutes, 0)} min</option>`
     )
   ].join('');
+  const availabilityServiceCheckboxes = bookingCatalog.length
+    ? bookingCatalog
+      .map(
+        (service) => `
+          <label class="checkbox-pill checkbox-pill-service">
+            <input type="checkbox" class="availability-service" value="${service.id}" />
+            <span>${escapeHtml(service.name)}</span>
+          </label>
+        `
+      )
+      .join('')
+    : '<div class="hint">Nejsou dostupné žádné služby.</div>';
 
   openModal(`
     <div class="modal-header">
@@ -2380,7 +2392,11 @@ async function openCalendarModal() {
           ? `
             <div class="settings-section availability-section">
               <h3>Moje dostupnost</h3>
-              <div class="meta">Vyber pracovní dny a časy (platí každý týden).</div>
+              <div class="meta">Pracovník: ${escapeHtml(state.auth.user?.full_name || '')}</div>
+              <div class="meta">Vyber pracovní dny, časy a služby, které provádíš (platí každý týden).</div>
+              <div class="availability-services">
+                ${availabilityServiceCheckboxes}
+              </div>
               <div class="availability-days">${dayCheckboxes}</div>
               <div class="availability-times">${timeCheckboxes}</div>
               <div class="actions-row">
@@ -2944,11 +2960,17 @@ async function openCalendarModal() {
     const data = await api.get('/api/availability');
     const daySet = new Set(data.days || []);
     const timeSet = new Set(data.times || []);
+    const selectedServiceIds = new Set((data.service_ids || []).map((id) => String(id)));
+    const servicesConfigured = Boolean(data.services_configured);
     document.querySelectorAll('.availability-day').forEach((input) => {
       input.checked = daySet.has(Number(input.value));
     });
     document.querySelectorAll('.availability-time').forEach((input) => {
       input.checked = timeSet.has(input.value);
+    });
+    document.querySelectorAll('.availability-service').forEach((input) => {
+      const serviceId = String(input.value || '');
+      input.checked = servicesConfigured ? selectedServiceIds.has(serviceId) : true;
     });
 
     document.getElementById('availabilitySave').addEventListener('click', async () => {
@@ -2958,9 +2980,13 @@ async function openCalendarModal() {
       const selectedTimes = Array.from(document.querySelectorAll('.availability-time:checked')).map(
         (input) => input.value
       );
+      const selectedServices = Array.from(document.querySelectorAll('.availability-service:checked')).map(
+        (input) => input.value
+      );
       await api.post('/api/availability', {
         days: selectedDays,
-        times: selectedTimes
+        times: selectedTimes,
+        service_ids: selectedServices
       });
       alert('Dostupnost uložena.');
     });
