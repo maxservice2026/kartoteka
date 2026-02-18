@@ -1537,6 +1537,10 @@ function renderVisits() {
       if (changeInfo && changeInfo.new_worker_id !== group.worker_id) {
         delete state.visitWorkerChanges[group.key];
       }
+      const baselineInfo = state.visitWorkerChanges[group.key];
+      if (baselineInfo && baselineInfo.base_worker_id && baselineInfo.base_worker_id === group.worker_id) {
+        delete state.visitWorkerChanges[group.key];
+      }
       const activeChange = state.visitWorkerChanges[group.key] || null;
       const title = group.titles.join(' + ') || 'Služba';
       const worker = activeChange
@@ -1605,7 +1609,9 @@ function renderVisits() {
       const nextWorker = state.settings.workers.find((worker) => worker.id === nextWorkerId);
       if (!nextWorker) return;
 
-      const oldWorkerName = state.visitWorkerChanges[groupKey]?.new_worker_name || group.worker_name || 'Neurčeno';
+      const existingChange = state.visitWorkerChanges[groupKey] || null;
+      const baseWorkerId = (existingChange?.base_worker_id || currentWorkerId || '').toString();
+      const baseWorkerName = existingChange?.base_worker_name || group.worker_name || 'Neurčeno';
       const visitIds = group.visits.map((visit) => visit.id).filter(Boolean);
       if (!visitIds.length) return;
 
@@ -1621,11 +1627,17 @@ function renderVisits() {
             worker_name: nextWorker.name
           };
         });
-        state.visitWorkerChanges[groupKey] = {
-          old_worker_name: oldWorkerName,
-          new_worker_name: nextWorker.name,
-          new_worker_id: nextWorkerId
-        };
+        if (baseWorkerId && nextWorkerId === baseWorkerId) {
+          delete state.visitWorkerChanges[groupKey];
+        } else {
+          state.visitWorkerChanges[groupKey] = {
+            base_worker_id: baseWorkerId,
+            base_worker_name: baseWorkerName,
+            old_worker_name: baseWorkerName,
+            new_worker_name: nextWorker.name,
+            new_worker_id: nextWorkerId
+          };
+        }
         renderVisits();
       } catch (err) {
         selectEl.disabled = false;
