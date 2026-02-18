@@ -2912,8 +2912,13 @@ async function openCalendarModal(options = {}) {
     const [selectedYear, selectedMonth, selectedDay] = String(bookingState.selectedDate || '').split('-').map(Number);
     const selectedInThisMonth = selectedYear === bookingState.mapYear && selectedMonth === bookingState.mapMonth;
     const daysInMonth = new Date(bookingState.mapYear, bookingState.mapMonth, 0).getDate();
+    const jsWeekday = new Date(bookingState.mapYear, bookingState.mapMonth - 1, 1).getDay();
+    const mondayOffset = (jsWeekday + 6) % 7;
 
     const dayButtons = [];
+    for (let i = 0; i < mondayOffset; i += 1) {
+      dayButtons.push('<div class="date-availability-day empty" aria-hidden="true"></div>');
+    }
     for (let day = 1; day <= daysInMonth; day += 1) {
       const isAvailable = availableDays.has(day);
       const isSelected = selectedInThisMonth && selectedDay === day;
@@ -2927,6 +2932,9 @@ async function openCalendarModal(options = {}) {
         <button type="button" class="ghost date-availability-nav" data-nav="-1">‹</button>
         <div class="date-availability-title">${monthName(bookingState.mapMonth - 1)} ${bookingState.mapYear}</div>
         <button type="button" class="ghost date-availability-nav" data-nav="1">›</button>
+      </div>
+      <div class="date-availability-weekdays">
+        <span>Po</span><span>Út</span><span>St</span><span>Čt</span><span>Pá</span><span>So</span><span>Ne</span>
       </div>
       <div class="date-availability-grid">${dayButtons.join('')}</div>
     `;

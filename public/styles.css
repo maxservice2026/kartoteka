@@ -574,6 +574,19 @@ button.primary:hover {
   padding: 0;
 }
 
+.date-availability-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.date-availability-weekdays span {
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .date-availability-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -588,6 +601,12 @@ button.primary:hover {
   padding: 6px 0;
   font-size: 12px;
   cursor: default;
+}
+
+.date-availability-day.empty {
+  border: 0;
+  background: transparent;
+  pointer-events: none;
 }
 
 .date-availability-day.available {

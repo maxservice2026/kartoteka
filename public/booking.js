@@ -203,11 +203,16 @@ function renderDateMap(days) {
     return;
   }
   dom.selectedDate.textContent = state.selectedDate ? `Vybrané datum: ${formatDateDisplay(state.selectedDate)}` : '';
-  const available = new Set(days || []);
+  const available = new Set((days || []).map((day) => Number(day)));
   const [selectedYear, selectedMonth, selectedDay] = (state.selectedDate || '').split('-').map(Number);
   const selectedIsCurrentMonth = selectedYear === state.dateMapYear && selectedMonth === state.dateMapMonth;
   const lastDay = new Date(state.dateMapYear, state.dateMapMonth, 0).getDate();
+  const jsWeekday = new Date(state.dateMapYear, state.dateMapMonth - 1, 1).getDay();
+  const mondayOffset = (jsWeekday + 6) % 7;
   const dayButtons = [];
+  for (let i = 0; i < mondayOffset; i += 1) {
+    dayButtons.push('<div class="date-availability-day empty" aria-hidden="true"></div>');
+  }
   for (let day = 1; day <= lastDay; day += 1) {
     const isAvailable = available.has(day);
     const isSelected = selectedIsCurrentMonth && selectedDay === day;
@@ -221,6 +226,9 @@ function renderDateMap(days) {
       <div class="date-availability-title">${monthLabel(state.dateMapYear, state.dateMapMonth)}</div>
       <button type="button" class="ghost date-availability-nav" data-nav="1">›</button>
     </div>
+    <div class="date-availability-weekdays">
+      <span>Po</span><span>Út</span><span>St</span><span>Čt</span><span>Pá</span><span>So</span><span>Ne</span>
+    </div>
     <div class="date-availability-grid">${dayButtons.join('')}</div>
   `;
   dom.dateMap.classList.remove('hidden');
@@ -231,7 +239,7 @@ function renderDateMap(days) {
       await loadDateMap();
     });
   });
-  dom.dateMap.querySelectorAll('.date-availability-day').forEach((button) => {
+  dom.dateMap.querySelectorAll('button.date-availability-day').forEach((button) => {
     button.addEventListener('click', async () => {
       const day = Number(button.dataset.day);
       state.selectedDate = `${state.dateMapYear}-${String(state.dateMapMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
