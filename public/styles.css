@@ -1297,8 +1297,14 @@ button.primary:hover {
 
 .slot-grid {
   display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: start;
+}
+
+.slot-time-group {
+  display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .slot-button.active {
@@ -1323,6 +1329,12 @@ button.primary:hover {
   border-style: dashed;
   color: #9b9b9b;
   background: rgba(148, 148, 148, 0.08);
+}
+
+.slot-button.is-unavailable {
+  border-style: dashed;
+  color: #b3b3b3;
+  background: rgba(148, 148, 148, 0.06);
 }
 
 .slot-status {

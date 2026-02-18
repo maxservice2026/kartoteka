@@ -305,12 +305,19 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     startByWorker.get(slot.worker_id).add(slot.time_slot);
   });
 
+  const workers = Array.from(baseByWorker.entries())
+    .map(([id, value]) => ({
+      id,
+      name: value.worker_name || 'Pracovník'
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'cs'));
+
   const slotList = timeSlots();
   const requiredSlots = Math.max(1, Math.ceil(state.duration / 30));
 
   const highlightSelection = (workerId, startTime) => {
     document.querySelectorAll('.slot-button').forEach((item) => {
-      item.classList.remove('is-selected', 'is-valid', 'is-invalid');
+      item.classList.remove('active', 'is-selected', 'is-valid', 'is-invalid');
     });
     const startIndex = slotList.indexOf(startTime);
     if (startIndex === -1) return false;
@@ -337,44 +344,65 @@ function renderSlots(baseSlots, startSlots, hintText = '') {
     return ok;
   };
 
-  baseSlots.forEach((slot) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'ghost slot-button';
-    if (slot.reserved) {
-      button.innerHTML = `<span class="slot-main">${slot.time_slot} • <span class="slot-status">Obsazeno</span></span>`;
-    } else {
-      button.innerHTML = `<span class="slot-main">${slot.time_slot} • ${slot.worker_name}</span>`;
-    }
-    button.dataset.workerId = slot.worker_id;
-    button.dataset.time = slot.time_slot;
-    if (slot.reserved) {
-      button.classList.add('is-reserved');
-      button.disabled = true;
-    } else if (state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) {
-      button.classList.add('is-buffer');
-      button.disabled = true;
-    } else if (startByWorker.get(slot.worker_id)?.has(slot.time_slot)) {
-      button.classList.add('is-start');
-    }
-    button.addEventListener('click', () => {
-      if (slot.reserved || state.blockedStarts.has(`${slot.worker_id}:${slot.time_slot}`)) return;
-      document.querySelectorAll('.slot-button').forEach((item) => item.classList.remove('active'));
-      button.classList.add('active');
-      state.selectedSlot = {
-        worker_id: slot.worker_id,
-        time: slot.time_slot,
-        worker_name: slot.worker_name
-      };
-      const valid = highlightSelection(slot.worker_id, slot.time_slot);
-      dom.submit.disabled = !valid;
-      if (!valid) {
-        setResult('Vybraný termín nevyhovuje délce služby.', true);
-      } else {
-        setResult('', false);
+  const visibleTimes = slotList.filter((timeSlot) =>
+    workers.some((worker) => baseByWorker.get(worker.id)?.slots.has(timeSlot))
+  );
+
+  visibleTimes.forEach((timeSlot) => {
+    const group = document.createElement('div');
+    group.className = 'slot-time-group';
+
+    workers.forEach((worker) => {
+      const slotMeta = baseByWorker.get(worker.id)?.slots.get(timeSlot);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ghost slot-button';
+      button.dataset.workerId = worker.id;
+      button.dataset.time = timeSlot;
+
+      if (!slotMeta) {
+        button.innerHTML = `<span class="slot-main">${timeSlot} • ${worker.name}</span>`;
+        button.classList.add('is-unavailable');
+        button.disabled = true;
+        group.appendChild(button);
+        return;
       }
+
+      if (slotMeta.reserved) {
+        button.innerHTML = `<span class="slot-main">${timeSlot} • <span class="slot-status">Obsazeno</span></span>`;
+      } else {
+        button.innerHTML = `<span class="slot-main">${timeSlot} • ${worker.name}</span>`;
+      }
+
+      const key = `${worker.id}:${timeSlot}`;
+      const isStart = startByWorker.get(worker.id)?.has(timeSlot);
+      if (slotMeta.reserved) {
+        button.classList.add('is-reserved');
+        button.disabled = true;
+      } else if (state.blockedStarts.has(key) || !isStart) {
+        button.classList.add('is-buffer');
+        button.disabled = true;
+      }
+
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        state.selectedSlot = {
+          worker_id: worker.id,
+          time: timeSlot,
+          worker_name: worker.name
+        };
+        const valid = highlightSelection(worker.id, timeSlot);
+        dom.submit.disabled = !valid;
+        if (!valid) {
+          setResult('Vybraný termín nevyhovuje délce služby.', true);
+        } else {
+          setResult('', false);
+        }
+      });
+      group.appendChild(button);
     });
-    dom.slots.appendChild(button);
+
+    dom.slots.appendChild(group);
   });
 }
 
