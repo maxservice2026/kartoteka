@@ -2073,6 +2073,8 @@ async function addGenericVisit() {
   const clientId = await saveClient();
   if (!clientId) return null;
   const clientName = (dom.fullName.value || '').toString().trim();
+  const clientPhone = (dom.phone.value || '').toString().trim();
+  const clientEmail = (dom.email.value || '').toString().trim();
 
   if (!dom.genWorker.value) {
     alert('Vyber pracovníka pro ekonomiku.');
@@ -2124,7 +2126,7 @@ async function addGenericVisit() {
   resetVisitFields();
   await loadVisits(clientId);
   await loadSummary();
-  return { clientId, clientName };
+  return { clientId, clientName, clientPhone, clientEmail };
 }
 
 async function addGenericVisitAndPickCalendar() {
@@ -2132,7 +2134,10 @@ async function addGenericVisitAndPickCalendar() {
   if (!result) return;
   await runProFeature('calendar', () =>
     openCalendarModal({
-      prefillClientName: result.clientName
+      prefillClientName: result.clientName,
+      prefillClientId: result.clientId,
+      prefillClientPhone: result.clientPhone,
+      prefillClientEmail: result.clientEmail
     })
   );
 }
@@ -2241,6 +2246,9 @@ function buildCalendarHtml(year, month, reservations) {
 
 async function openCalendarModal(options = {}) {
   const prefillClientName = (options.prefillClientName || '').toString().trim();
+  const prefillClientId = (options.prefillClientId || '').toString().trim();
+  const prefillClientPhone = (options.prefillClientPhone || '').toString().trim();
+  const prefillClientEmail = (options.prefillClientEmail || '').toString().trim();
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -2384,7 +2392,8 @@ async function openCalendarModal(options = {}) {
         <div class="field-row">
           <div class="field">
             <label>Jméno klientky</label>
-            <input type="text" id="calendarBookingName" placeholder="Např. Jana Nováková" />
+            <input type="text" id="calendarBookingName" placeholder="Např. Jana Nováková" list="calendarBookingClientList" autocomplete="off" />
+            <datalist id="calendarBookingClientList"></datalist>
           </div>
           <div class="field">
             <label>Telefon</label>
@@ -2505,12 +2514,74 @@ async function openCalendarModal(options = {}) {
   const bookingPicked = document.getElementById('calendarBookingPicked');
   const bookingSave = document.getElementById('calendarBookingSave');
   const bookingName = document.getElementById('calendarBookingName');
+  const bookingClientList = document.getElementById('calendarBookingClientList');
   const bookingPhone = document.getElementById('calendarBookingPhone');
   const bookingEmail = document.getElementById('calendarBookingEmail');
   const bookingNote = document.getElementById('calendarBookingNote');
+  const bookingClientState = {
+    lockedFromVisit: Boolean(prefillClientName),
+    selectedClientId: prefillClientId || '',
+    suggestions: [],
+    searchTimer: null,
+    searchSeq: 0
+  };
+
+  const normalizedName = (value) => (value || '').toString().trim().replace(/\s+/g, ' ').toLocaleLowerCase('cs');
+  const findExactClientMatch = (list, name) => {
+    const needle = normalizedName(name);
+    if (!needle) return null;
+    return (Array.isArray(list) ? list : []).find((item) => normalizedName(item.full_name) === needle) || null;
+  };
+  const renderClientSuggestions = (rows = []) => {
+    bookingClientState.suggestions = Array.isArray(rows) ? rows : [];
+    if (!bookingClientList) return;
+    bookingClientList.innerHTML = bookingClientState.suggestions
+      .slice(0, 25)
+      .map((client) => `<option value="${escapeHtml(client.full_name || '')}"></option>`)
+      .join('');
+  };
+  const applyMatchedClient = (client) => {
+    bookingClientState.selectedClientId = client?.id || '';
+    if (!client) return;
+    if (!bookingPhone.value.trim() && client.phone) bookingPhone.value = client.phone;
+    if (!bookingEmail.value.trim() && client.email) bookingEmail.value = client.email;
+  };
+  const queueClientSearch = () => {
+    if (bookingClientState.lockedFromVisit) return;
+    const query = bookingName.value.trim();
+    if (bookingClientState.searchTimer) clearTimeout(bookingClientState.searchTimer);
+    if (!query) {
+      bookingClientState.selectedClientId = '';
+      renderClientSuggestions([]);
+      updateBookingSaveState();
+      return;
+    }
+    bookingClientState.searchTimer = setTimeout(async () => {
+      const seq = ++bookingClientState.searchSeq;
+      try {
+        const rows = await api.get(`/api/clients?search=${encodeURIComponent(query)}`);
+        if (seq !== bookingClientState.searchSeq) return;
+        renderClientSuggestions(rows);
+        const exact = findExactClientMatch(rows, bookingName.value);
+        applyMatchedClient(exact);
+      } catch (err) {
+        if (seq !== bookingClientState.searchSeq) return;
+        renderClientSuggestions([]);
+        bookingClientState.selectedClientId = '';
+      } finally {
+        updateBookingSaveState();
+      }
+    }, 180);
+  };
 
   if (prefillClientName) {
     bookingName.value = prefillClientName;
+    bookingName.readOnly = true;
+    bookingName.classList.add('input-readonly');
+    bookingName.removeAttribute('list');
+    if (bookingClientList) bookingClientList.remove();
+    if (prefillClientPhone) bookingPhone.value = prefillClientPhone;
+    if (prefillClientEmail) bookingEmail.value = prefillClientEmail;
   }
 
   const displayDate = (isoDate) => {
@@ -3078,12 +3149,72 @@ async function openCalendarModal(options = {}) {
     updateBookingSaveState();
     await loadBookingDays();
   });
-  bookingName.addEventListener('input', updateBookingSaveState);
+  bookingName.addEventListener('input', () => {
+    if (!bookingClientState.lockedFromVisit) {
+      bookingClientState.selectedClientId = '';
+      queueClientSearch();
+    }
+    updateBookingSaveState();
+  });
+  bookingName.addEventListener('change', () => {
+    if (bookingClientState.lockedFromVisit) return;
+    const exact = findExactClientMatch(bookingClientState.suggestions, bookingName.value);
+    applyMatchedClient(exact);
+    updateBookingSaveState();
+  });
+
+  const resolveOrCreateBookingClient = async (clientName) => {
+    if (bookingClientState.selectedClientId) {
+      return bookingClientState.selectedClientId;
+    }
+
+    if (bookingClientState.lockedFromVisit && clientName) {
+      try {
+        const rows = await api.get(`/api/clients?search=${encodeURIComponent(clientName)}`);
+        const exact = findExactClientMatch(rows, clientName);
+        if (exact?.id) {
+          bookingClientState.selectedClientId = exact.id;
+          return exact.id;
+        }
+      } catch (err) {
+        // fallback: create below
+      }
+    }
+
+    if (!bookingClientState.lockedFromVisit && clientName) {
+      try {
+        const rows = await api.get(`/api/clients?search=${encodeURIComponent(clientName)}`);
+        const exact = findExactClientMatch(rows, clientName);
+        if (exact?.id) {
+          bookingClientState.selectedClientId = exact.id;
+          return exact.id;
+        }
+      } catch (err) {
+        // fallback: create below
+      }
+    }
+
+    const created = await api.post('/api/clients', {
+      full_name: clientName,
+      phone: bookingPhone.value.trim(),
+      email: bookingEmail.value.trim()
+    });
+    bookingClientState.selectedClientId = created?.id || '';
+    return bookingClientState.selectedClientId;
+  };
 
   bookingSave.addEventListener('click', async () => {
     const clientName = bookingName.value.trim();
     if (!bookingState.serviceId || !bookingState.selectedDate || !bookingState.selectedSlot || !clientName) {
       alert('Vyber službu, den, čas a vyplň jméno klientky.');
+      return;
+    }
+
+    try {
+      await resolveOrCreateBookingClient(clientName);
+    } catch (err) {
+      const message = err?.message || 'Nepodařilo se uložit klientku.';
+      alert(message);
       return;
     }
 

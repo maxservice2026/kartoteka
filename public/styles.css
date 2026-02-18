@@ -488,6 +488,12 @@ button.primary:hover {
   font-family: inherit;
 }
 
+.field .input-readonly {
+  background: #f5f5f5;
+  color: #555;
+  cursor: not-allowed;
+}
+
 .service-grid {
   display: flex;
   flex-wrap: wrap;
