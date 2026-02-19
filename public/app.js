@@ -3000,8 +3000,10 @@ async function openCalendarModal(options = {}) {
         })
         .filter(Boolean);
 
-      if (workersAtTime.length <= 1) {
-        const single = workersAtTime[0];
+      const selectableWorkersAtTime = workersAtTime.filter((item) => item.selectable);
+
+      if (selectableWorkersAtTime.length <= 1) {
+        const single = selectableWorkersAtTime[0] || (workersAtTime.length === 1 ? workersAtTime[0] : null);
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'ghost slot-button';
