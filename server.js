@@ -745,6 +745,33 @@ async function initDb() {
       FOREIGN KEY (worker_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (service_id) REFERENCES services(id)
     );
+    CREATE TABLE IF NOT EXISTS availability_day_overrides (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      worker_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      services_configured INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (worker_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS availability_day_override_slots (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      override_id TEXT NOT NULL,
+      time_slot TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (override_id) REFERENCES availability_day_overrides(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS availability_day_override_services (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT,
+      override_id TEXT NOT NULL,
+      service_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (override_id) REFERENCES availability_day_overrides(id) ON DELETE CASCADE,
+      FOREIGN KEY (service_id) REFERENCES services(id)
+    );
     CREATE TABLE IF NOT EXISTS reservations (
       id TEXT PRIMARY KEY,
       tenant_id TEXT,
@@ -863,6 +890,11 @@ async function initDb() {
   await ensureColumn('expenses', 'tenant_id', 'TEXT');
   await ensureColumn('availability', 'tenant_id', 'TEXT');
   await ensureColumn('worker_services', 'tenant_id', 'TEXT');
+  await ensureColumn('availability_day_overrides', 'tenant_id', 'TEXT');
+  await ensureColumn('availability_day_overrides', 'services_configured', 'INTEGER DEFAULT 1');
+  await ensureColumn('availability_day_overrides', 'updated_at', 'TEXT');
+  await ensureColumn('availability_day_override_slots', 'tenant_id', 'TEXT');
+  await ensureColumn('availability_day_override_services', 'tenant_id', 'TEXT');
   await ensureColumn('reservations', 'tenant_id', 'TEXT');
   await ensureColumn('clones', 'tenant_id', 'TEXT');
   await ensureColumn('clones', 'domain', 'TEXT');
@@ -938,6 +970,22 @@ async function initDb() {
   await db.run('UPDATE expenses SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE availability SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE worker_services SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
+  await db.run('UPDATE availability_day_overrides SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [
+    defaultTenantId,
+    ''
+  ]);
+  await db.run('UPDATE availability_day_override_slots SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [
+    defaultTenantId,
+    ''
+  ]);
+  await db.run(
+    'UPDATE availability_day_override_services SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?',
+    [defaultTenantId, '']
+  );
+  await db.run(
+    'UPDATE availability_day_overrides SET services_configured = 1 WHERE services_configured IS NULL OR services_configured NOT IN (0, 1)'
+  );
+  await db.run('UPDATE availability_day_overrides SET updated_at = created_at WHERE updated_at IS NULL');
   await db.run('UPDATE reservations SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE clones SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
   await db.run('UPDATE inventory_items SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ?', [defaultTenantId, '']);
@@ -957,6 +1005,15 @@ async function initDb() {
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS tenant_features_tenant_feature_key_idx ON tenant_features (tenant_id, feature_key)');
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS service_inventory_usage_unique_idx ON service_inventory_usage (tenant_id, service_id, item_id)');
   await db.exec('CREATE UNIQUE INDEX IF NOT EXISTS worker_services_unique_idx ON worker_services (tenant_id, worker_id, service_id)');
+  await db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS availability_day_overrides_unique_idx ON availability_day_overrides (tenant_id, worker_id, date)'
+  );
+  await db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS availability_day_override_slots_unique_idx ON availability_day_override_slots (tenant_id, override_id, time_slot)'
+  );
+  await db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS availability_day_override_services_unique_idx ON availability_day_override_services (tenant_id, override_id, service_id)'
+  );
 
   const cloneRows = await db.all('SELECT id, name, slug, domain, tenant_id FROM clones WHERE active = 1');
   for (const clone of cloneRows) {
@@ -1571,59 +1628,176 @@ async function resolveSelectedServices(serviceIds, tenantId, optionSelection = {
   return { serviceRows, serviceById, duration, selectedOptions };
 }
 
-async function calculatePublicAvailability(tenantId, date, duration, selectedServiceIds = []) {
+function normalizeTimeValues(rawValues = []) {
+  const allowedSlots = new Set(timeSlots());
+  return Array.from(
+    new Set(
+      (Array.isArray(rawValues) ? rawValues : [])
+        .map((value) => String(value || '').trim())
+        .filter((value) => allowedSlots.has(value))
+    )
+  ).sort();
+}
+
+async function getEffectiveWorkerAvailability(tenantId, date, requestedServiceIds = []) {
   const day = weekdayIndex(date);
   if (day === null) {
     return { error: 'Neplatné datum.', status: 400 };
   }
 
+  const serviceFilter = Array.from(
+    new Set((Array.isArray(requestedServiceIds) ? requestedServiceIds : []).map((id) => String(id).trim()).filter(Boolean))
+  );
+
+  const workers = await db.all(
+    `SELECT id, full_name, COALESCE(calendar_services_configured, 0) AS calendar_services_configured
+     FROM users
+     WHERE active = 1 AND tenant_id = ?`,
+    [tenantId]
+  );
+  const workerById = new Map(workers.map((row) => [String(row.id), row]));
+
+  const weeklySlotRows = await db.all(
+    `SELECT worker_id, time_slot
+     FROM availability
+     WHERE tenant_id = ? AND day_of_week = ?`,
+    [tenantId, day]
+  );
+
+  const weeklyServiceRows = await db.all(
+    serviceFilter.length
+      ? `SELECT worker_id, service_id
+         FROM worker_services
+         WHERE tenant_id = ? AND service_id IN (${serviceFilter.map(() => '?').join(',')})`
+      : 'SELECT worker_id, service_id FROM worker_services WHERE tenant_id = ?',
+    serviceFilter.length ? [tenantId, ...serviceFilter] : [tenantId]
+  );
+
+  const overrideRows = await db.all(
+    `SELECT id, worker_id, COALESCE(services_configured, 1) AS services_configured
+     FROM availability_day_overrides
+     WHERE tenant_id = ? AND date = ?`,
+    [tenantId, date]
+  );
+  const overrideIds = overrideRows.map((row) => String(row.id || '')).filter(Boolean);
+  const overrideByWorker = new Map(overrideRows.map((row) => [String(row.worker_id || ''), row]));
+
+  const overrideSlotRows = overrideIds.length
+    ? await db.all(
+      `SELECT override_id, time_slot
+       FROM availability_day_override_slots
+       WHERE tenant_id = ? AND override_id IN (${overrideIds.map(() => '?').join(',')})`,
+      [tenantId, ...overrideIds]
+    )
+    : [];
+
+  const overrideServiceRows = overrideIds.length
+    ? await db.all(
+      serviceFilter.length
+        ? `SELECT override_id, service_id
+           FROM availability_day_override_services
+           WHERE tenant_id = ? AND override_id IN (${overrideIds.map(() => '?').join(',')}) AND service_id IN (${serviceFilter.map(() => '?').join(',')})`
+        : `SELECT override_id, service_id
+           FROM availability_day_override_services
+           WHERE tenant_id = ? AND override_id IN (${overrideIds.map(() => '?').join(',')})`,
+      serviceFilter.length ? [tenantId, ...overrideIds, ...serviceFilter] : [tenantId, ...overrideIds]
+    )
+    : [];
+
+  const weeklySlotsByWorker = new Map();
+  weeklySlotRows.forEach((row) => {
+    const workerId = String(row.worker_id || '');
+    const slot = String(row.time_slot || '').trim();
+    if (!workerId || !slot) return;
+    if (!weeklySlotsByWorker.has(workerId)) weeklySlotsByWorker.set(workerId, new Set());
+    weeklySlotsByWorker.get(workerId).add(slot);
+  });
+
+  const weeklyServicesByWorker = new Map();
+  weeklyServiceRows.forEach((row) => {
+    const workerId = String(row.worker_id || '');
+    const serviceId = String(row.service_id || '').trim();
+    if (!workerId || !serviceId) return;
+    if (!weeklyServicesByWorker.has(workerId)) weeklyServicesByWorker.set(workerId, new Set());
+    weeklyServicesByWorker.get(workerId).add(serviceId);
+  });
+
+  const overrideIdByWorker = new Map();
+  const overrideSlotsByWorker = new Map();
+  const overrideServicesByWorker = new Map();
+  overrideRows.forEach((row) => {
+    const workerId = String(row.worker_id || '');
+    const overrideId = String(row.id || '');
+    if (!workerId || !overrideId) return;
+    overrideIdByWorker.set(workerId, overrideId);
+    if (!overrideSlotsByWorker.has(workerId)) overrideSlotsByWorker.set(workerId, new Set());
+    if (!overrideServicesByWorker.has(workerId)) overrideServicesByWorker.set(workerId, new Set());
+  });
+  overrideSlotRows.forEach((row) => {
+    const overrideId = String(row.override_id || '');
+    const slot = String(row.time_slot || '').trim();
+    if (!overrideId || !slot) return;
+    const workerId = overrideRows.find((item) => String(item.id || '') === overrideId)?.worker_id;
+    if (!workerId) return;
+    const normalizedWorkerId = String(workerId);
+    if (!overrideSlotsByWorker.has(normalizedWorkerId)) overrideSlotsByWorker.set(normalizedWorkerId, new Set());
+    overrideSlotsByWorker.get(normalizedWorkerId).add(slot);
+  });
+  overrideServiceRows.forEach((row) => {
+    const overrideId = String(row.override_id || '');
+    const serviceId = String(row.service_id || '').trim();
+    if (!overrideId || !serviceId) return;
+    const workerId = overrideRows.find((item) => String(item.id || '') === overrideId)?.worker_id;
+    if (!workerId) return;
+    const normalizedWorkerId = String(workerId);
+    if (!overrideServicesByWorker.has(normalizedWorkerId)) overrideServicesByWorker.set(normalizedWorkerId, new Set());
+    overrideServicesByWorker.get(normalizedWorkerId).add(serviceId);
+  });
+
+  const workerState = new Map();
+  workers.forEach((worker) => {
+    const workerId = String(worker.id || '');
+    const override = overrideByWorker.get(workerId);
+    const hasOverride = Boolean(override);
+    const slots = hasOverride ? (overrideSlotsByWorker.get(workerId) || new Set()) : (weeklySlotsByWorker.get(workerId) || new Set());
+    const servicesConfigured = hasOverride
+      ? toInt(override?.services_configured, 1) === 1
+      : toInt(worker.calendar_services_configured, 0) === 1;
+    const serviceSet = hasOverride ? (overrideServicesByWorker.get(workerId) || new Set()) : (weeklyServicesByWorker.get(workerId) || new Set());
+    workerState.set(workerId, {
+      worker_id: workerId,
+      worker_name: worker.full_name || 'Pracovník',
+      slots,
+      services_configured: servicesConfigured,
+      service_ids: serviceSet,
+      has_override: hasOverride,
+      override_id: hasOverride ? overrideIdByWorker.get(workerId) || '' : ''
+    });
+  });
+
+  const canWorkerDoSelectedServices = (workerIdRaw) => {
+    const workerId = String(workerIdRaw || '');
+    if (!workerId || serviceFilter.length === 0) return true;
+    const worker = workerState.get(workerId);
+    if (!worker) return false;
+    if (!worker.services_configured) return true;
+    return serviceFilter.every((serviceId) => worker.service_ids.has(serviceId));
+  };
+
+  return { day, workers: workerState, workerById, canWorkerDoSelectedServices };
+}
+
+async function calculatePublicAvailability(tenantId, date, duration, selectedServiceIds = []) {
   const requiredSlots = Math.max(1, Math.ceil(duration / 30));
   const slotList = timeSlots();
   const slotIndex = Object.fromEntries(slotList.map((slot, index) => [slot, index]));
   const requestedServiceIds = Array.from(
     new Set((Array.isArray(selectedServiceIds) ? selectedServiceIds : []).map((id) => String(id)).filter(Boolean))
   );
-  const workerConfigRows = await db.all(
-    `SELECT id, COALESCE(calendar_services_configured, 0) AS calendar_services_configured
-     FROM users
-     WHERE active = 1 AND tenant_id = ?`,
-    [tenantId]
-  );
-  const workerServiceRows = await db.all(
-    requestedServiceIds.length
-      ? `SELECT worker_id, service_id
-         FROM worker_services
-         WHERE tenant_id = ? AND service_id IN (${requestedServiceIds.map(() => '?').join(',')})`
-      : 'SELECT worker_id, service_id FROM worker_services WHERE tenant_id = ?',
-    requestedServiceIds.length ? [tenantId, ...requestedServiceIds] : [tenantId]
-  );
-  const configuredByWorker = new Map(
-    workerConfigRows.map((row) => [String(row.id), toInt(row.calendar_services_configured, 0) === 1])
-  );
-  const servicesByWorker = new Map();
-  workerServiceRows.forEach((row) => {
-    const workerId = String(row.worker_id || '');
-    const serviceId = String(row.service_id || '');
-    if (!workerId || !serviceId) return;
-    if (!servicesByWorker.has(workerId)) servicesByWorker.set(workerId, new Set());
-    servicesByWorker.get(workerId).add(serviceId);
-  });
-  const canWorkerDoSelectedServices = (workerIdRaw) => {
-    const workerId = String(workerIdRaw || '');
-    if (!workerId || requestedServiceIds.length === 0) return true;
-    if (!configuredByWorker.get(workerId)) return true;
-    const selectedSet = servicesByWorker.get(workerId) || new Set();
-    return requestedServiceIds.every((serviceId) => selectedSet.has(serviceId));
-  };
 
-  const slots = await db.all(
-    `SELECT a.time_slot, a.worker_id, u.full_name as worker_name
-     FROM availability a
-     JOIN users u ON u.id = a.worker_id
-     WHERE u.active = 1 AND a.day_of_week = ? AND a.tenant_id = ? AND u.tenant_id = ?
-     ORDER BY a.time_slot, u.full_name`,
-    [day, tenantId, tenantId]
-  );
+  const profile = await getEffectiveWorkerAvailability(tenantId, date, requestedServiceIds);
+  if (profile.error) return profile;
+  const { workers: workerState, canWorkerDoSelectedServices } = profile;
 
   const reserved = await db.all(
     `SELECT r.worker_id, r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes,
@@ -1638,9 +1812,9 @@ async function calculatePublicAvailability(tenantId, date, duration, selectedSer
   const reservationsByWorker = new Map();
   const reservedByWorker = new Map();
   const workerNameById = new Map();
-  slots.forEach((slot) => {
-    if (!canWorkerDoSelectedServices(slot.worker_id)) return;
-    workerNameById.set(slot.worker_id, slot.worker_name);
+  workerState.forEach((value, workerId) => {
+    if (!canWorkerDoSelectedServices(workerId)) return;
+    workerNameById.set(workerId, value.worker_name);
   });
   reserved.forEach((row) => {
     if (!canWorkerDoSelectedServices(row.worker_id)) return;
@@ -1663,15 +1837,12 @@ async function calculatePublicAvailability(tenantId, date, duration, selectedSer
   });
 
   const availableByWorker = new Map();
-  slots.forEach((slot) => {
-    if (!canWorkerDoSelectedServices(slot.worker_id)) return;
-    if (!availableByWorker.has(slot.worker_id)) {
-      availableByWorker.set(slot.worker_id, {
-        worker_name: slot.worker_name,
-        slots: new Set()
-      });
-    }
-    availableByWorker.get(slot.worker_id).slots.add(slot.time_slot);
+  workerState.forEach((worker, workerId) => {
+    if (!canWorkerDoSelectedServices(workerId)) return;
+    availableByWorker.set(workerId, {
+      worker_name: worker.worker_name,
+      slots: worker.slots
+    });
   });
 
   const baseSlots = [];
@@ -1881,31 +2052,18 @@ app.post('/api/public/reservations', async (req, res) => {
 
   const worker = await db.get('SELECT id FROM users WHERE id = ? AND tenant_id = ? AND active = 1', [workerId, req.tenant.id]);
   if (!worker) return res.status(400).json({ error: 'Pracovník není platný.' });
-  const workerConfig = await db.get(
-    'SELECT COALESCE(calendar_services_configured, 0) AS calendar_services_configured FROM users WHERE id = ? AND tenant_id = ?',
-    [workerId, req.tenant.id]
-  );
-  if (toInt(workerConfig?.calendar_services_configured, 0) === 1) {
-    const placeholders = uniqueServiceIds.map(() => '?').join(',');
-    const allowedRows = await db.all(
-      `SELECT service_id FROM worker_services WHERE tenant_id = ? AND worker_id = ? AND service_id IN (${placeholders})`,
-      [req.tenant.id, workerId, ...uniqueServiceIds]
-    );
-    const allowedSet = new Set(allowedRows.map((row) => String(row.service_id || '')));
-    const missingService = uniqueServiceIds.find((id) => !allowedSet.has(id));
-    if (missingService) {
-      return res.status(400).json({ error: 'Vybraný pracovník tuto službu neprovádí.' });
-    }
+  const effective = await getEffectiveWorkerAvailability(req.tenant.id, date, uniqueServiceIds);
+  if (effective.error) {
+    return res.status(effective.status || 400).json({ error: effective.error });
   }
-
-  const day = weekdayIndex(date);
-  if (day === null) return res.status(400).json({ error: 'Neplatné datum.' });
-
-  const availabilityRows = await db.all(
-    'SELECT time_slot FROM availability WHERE worker_id = ? AND day_of_week = ? AND tenant_id = ?',
-    [workerId, day, req.tenant.id]
-  );
-  const availabilitySet = new Set(availabilityRows.map((row) => row.time_slot));
+  if (!effective.canWorkerDoSelectedServices(workerId)) {
+    return res.status(400).json({ error: 'Vybraný pracovník tuto službu neprovádí.' });
+  }
+  const workerProfile = effective.workers.get(String(workerId));
+  if (!workerProfile) {
+    return res.status(400).json({ error: 'Pracovník není dostupný.' });
+  }
+  const availabilitySet = workerProfile.slots || new Set();
 
   const existingReservations = await db.all(
     `SELECT r.time_slot, COALESCE(r.duration_minutes, s.duration_minutes, 30) as duration_minutes
@@ -2039,6 +2197,63 @@ app.put('/api/tenant/logo', requireAdmin, async (req, res) => {
   res.json({ ok: true, tenant });
 });
 
+async function listWorkerDayOverrides(tenantId, workerId) {
+  const overrides = await db.all(
+    `SELECT id, date, COALESCE(services_configured, 1) AS services_configured
+     FROM availability_day_overrides
+     WHERE tenant_id = ? AND worker_id = ?
+     ORDER BY date`,
+    [tenantId, workerId]
+  );
+  if (!overrides.length) return [];
+
+  const overrideIds = overrides.map((row) => String(row.id || '')).filter(Boolean);
+  if (!overrideIds.length) return [];
+
+  const slotRows = await db.all(
+    `SELECT override_id, time_slot
+     FROM availability_day_override_slots
+     WHERE tenant_id = ? AND override_id IN (${overrideIds.map(() => '?').join(',')})`,
+    [tenantId, ...overrideIds]
+  );
+  const serviceRows = await db.all(
+    `SELECT override_id, service_id
+     FROM availability_day_override_services
+     WHERE tenant_id = ? AND override_id IN (${overrideIds.map(() => '?').join(',')})`,
+    [tenantId, ...overrideIds]
+  );
+
+  const slotsByOverride = new Map();
+  const servicesByOverride = new Map();
+  slotRows.forEach((row) => {
+    const overrideId = String(row.override_id || '');
+    const slot = String(row.time_slot || '').trim();
+    if (!overrideId || !slot) return;
+    if (!slotsByOverride.has(overrideId)) slotsByOverride.set(overrideId, new Set());
+    slotsByOverride.get(overrideId).add(slot);
+  });
+  serviceRows.forEach((row) => {
+    const overrideId = String(row.override_id || '');
+    const serviceId = String(row.service_id || '').trim();
+    if (!overrideId || !serviceId) return;
+    if (!servicesByOverride.has(overrideId)) servicesByOverride.set(overrideId, new Set());
+    servicesByOverride.get(overrideId).add(serviceId);
+  });
+
+  return overrides.map((row) => {
+    const overrideId = String(row.id || '');
+    const times = Array.from(slotsByOverride.get(overrideId) || []).sort();
+    const serviceIds = Array.from(servicesByOverride.get(overrideId) || []);
+    return {
+      id: overrideId,
+      date: row.date,
+      services_configured: toInt(row.services_configured, 1) === 1,
+      times,
+      service_ids: serviceIds
+    };
+  });
+}
+
 app.get('/api/availability', requireFeature('calendar'), async (req, res) => {
   if (req.user.role === 'reception') {
     return res.status(403).json({ error: 'Nemáte oprávnění.' });
@@ -2058,12 +2273,14 @@ app.get('/api/availability', requireFeature('calendar'), async (req, res) => {
   );
   const days = Array.from(new Set(rows.map((row) => row.day_of_week))).sort();
   const times = Array.from(new Set(rows.map((row) => row.time_slot))).sort();
+  const overrides = await listWorkerDayOverrides(req.tenant.id, req.user.id);
   res.json({
     days,
     times,
     worker_name: workerRow?.full_name || req.user.full_name,
     service_ids: workerServiceRows.map((row) => String(row.service_id || '')).filter(Boolean),
-    services_configured: toInt(workerRow?.calendar_services_configured, 0) === 1
+    services_configured: toInt(workerRow?.calendar_services_configured, 0) === 1,
+    overrides
   });
 });
 
@@ -2112,6 +2329,135 @@ app.post('/api/availability', requireFeature('calendar'), async (req, res) => {
   await db.run(
     'UPDATE users SET calendar_services_configured = 1 WHERE id = ? AND tenant_id = ?',
     [req.user.id, req.tenant.id]
+  );
+
+  res.json({ ok: true });
+});
+
+app.post('/api/availability/override', requireFeature('calendar'), async (req, res) => {
+  if (req.user.role === 'reception') {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+
+  const payload = req.body || {};
+  const date = toDateOnly(payload.date);
+  if (!date) {
+    return res.status(400).json({ error: 'Vyberte datum výjimky.' });
+  }
+
+  const times = normalizeTimeValues(payload.times);
+  const serviceIds = Array.from(
+    new Set((Array.isArray(payload.service_ids) ? payload.service_ids : []).map((id) => String(id || '').trim()).filter(Boolean))
+  );
+
+  if (serviceIds.length) {
+    const placeholders = serviceIds.map(() => '?').join(',');
+    const existing = await db.all(
+      `SELECT id FROM services WHERE tenant_id = ? AND id IN (${placeholders})`,
+      [req.tenant.id, ...serviceIds]
+    );
+    if (existing.length !== serviceIds.length) {
+      return res.status(400).json({ error: 'Některé služby nejsou platné.' });
+    }
+  }
+
+  const now = nowIso();
+  const servicesConfigured = serviceIds.length > 0 ? 1 : 0;
+  const existingOverride = await db.get(
+    `SELECT id FROM availability_day_overrides WHERE tenant_id = ? AND worker_id = ? AND date = ?`,
+    [req.tenant.id, req.user.id, date]
+  );
+  const overrideId = existingOverride?.id || newId();
+
+  await db.exec('BEGIN');
+  try {
+    if (existingOverride) {
+      await db.run(
+        `UPDATE availability_day_overrides
+         SET services_configured = ?, updated_at = ?
+         WHERE id = ? AND tenant_id = ?`,
+        [servicesConfigured, now, overrideId, req.tenant.id]
+      );
+    } else {
+      await db.run(
+        `INSERT INTO availability_day_overrides (id, tenant_id, worker_id, date, services_configured, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [overrideId, req.tenant.id, req.user.id, date, servicesConfigured, now, now]
+      );
+    }
+
+    await db.run(
+      'DELETE FROM availability_day_override_slots WHERE tenant_id = ? AND override_id = ?',
+      [req.tenant.id, overrideId]
+    );
+    await db.run(
+      'DELETE FROM availability_day_override_services WHERE tenant_id = ? AND override_id = ?',
+      [req.tenant.id, overrideId]
+    );
+
+    for (const slot of times) {
+      await db.run(
+        `INSERT INTO availability_day_override_slots (id, tenant_id, override_id, time_slot, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [newId(), req.tenant.id, overrideId, slot, now]
+      );
+    }
+
+    for (const serviceId of serviceIds) {
+      await db.run(
+        `INSERT INTO availability_day_override_services (id, tenant_id, override_id, service_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [newId(), req.tenant.id, overrideId, serviceId, now]
+      );
+    }
+
+    await db.exec('COMMIT');
+  } catch (err) {
+    await db.exec('ROLLBACK');
+    return res.status(500).json({ error: 'Nepodařilo se uložit výjimku.', detail: err.message });
+  }
+
+  res.json({
+    ok: true,
+    override: {
+      id: overrideId,
+      date,
+      times,
+      services_configured: servicesConfigured === 1,
+      service_ids: serviceIds
+    }
+  });
+});
+
+app.delete('/api/availability/override', requireFeature('calendar'), async (req, res) => {
+  if (req.user.role === 'reception') {
+    return res.status(403).json({ error: 'Nemáte oprávnění.' });
+  }
+
+  const date = toDateOnly(req.query.date || req.body?.date);
+  if (!date) {
+    return res.status(400).json({ error: 'Vyberte datum výjimky.' });
+  }
+
+  const existingOverride = await db.get(
+    `SELECT id FROM availability_day_overrides WHERE tenant_id = ? AND worker_id = ? AND date = ?`,
+    [req.tenant.id, req.user.id, date]
+  );
+  if (!existingOverride?.id) {
+    return res.json({ ok: true });
+  }
+
+  await db.run(
+    'DELETE FROM availability_day_override_slots WHERE tenant_id = ? AND override_id = ?',
+    [req.tenant.id, existingOverride.id]
+  );
+  await db.run(
+    'DELETE FROM availability_day_override_services WHERE tenant_id = ? AND override_id = ?',
+    [req.tenant.id, existingOverride.id]
+  );
+  await db.run(
+    'DELETE FROM availability_day_overrides WHERE tenant_id = ? AND id = ?',
+    [req.tenant.id, existingOverride.id]
   );
 
   res.json({ ok: true });
@@ -3617,6 +3963,9 @@ app.get('/api/backup', requireSuperAdmin, async (req, res) => {
     users: await db.all('SELECT * FROM users'),
     availability: await db.all('SELECT * FROM availability'),
     worker_services: await db.all('SELECT * FROM worker_services'),
+    availability_day_overrides: await db.all('SELECT * FROM availability_day_overrides'),
+    availability_day_override_slots: await db.all('SELECT * FROM availability_day_override_slots'),
+    availability_day_override_services: await db.all('SELECT * FROM availability_day_override_services'),
     clients: await db.all('SELECT * FROM clients'),
     visits: await db.all('SELECT * FROM visits'),
     expenses: await db.all('SELECT * FROM expenses'),
@@ -3646,6 +3995,9 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'service_inventory_usage',
     'inventory_items',
     'reservations',
+    'availability_day_override_services',
+    'availability_day_override_slots',
+    'availability_day_overrides',
     'availability',
     'worker_services',
     'visits',
@@ -3671,6 +4023,9 @@ app.post('/api/restore', requireSuperAdmin, async (req, res) => {
     'users',
     'availability',
     'worker_services',
+    'availability_day_overrides',
+    'availability_day_override_slots',
+    'availability_day_override_services',
     'clients',
     'visits',
     'expenses',

@@ -2283,6 +2283,16 @@ async function openCalendarModal(options = {}) {
       `
     )
     .join('');
+  const overrideTimeCheckboxes = timeSlots()
+    .map(
+      (time) => `
+        <label class="checkbox-pill">
+          <input type="checkbox" class="availability-override-time" value="${time}" />
+          ${time}
+        </label>
+      `
+    )
+    .join('');
 
   let servicesSource = Array.isArray(state.settings.services) ? state.settings.services : [];
   if (!servicesSource.length) {
@@ -2346,6 +2356,18 @@ async function openCalendarModal(options = {}) {
         (service) => `
           <label class="checkbox-pill checkbox-pill-service">
             <input type="checkbox" class="availability-service" value="${service.id}" />
+            <span>${escapeHtml(service.name)}</span>
+          </label>
+        `
+      )
+      .join('')
+    : '<div class="hint">Nejsou dostupné žádné služby.</div>';
+  const overrideServiceCheckboxes = bookingCatalog.length
+    ? bookingCatalog
+      .map(
+        (service) => `
+          <label class="checkbox-pill checkbox-pill-service">
+            <input type="checkbox" class="availability-override-service" value="${service.id}" />
             <span>${escapeHtml(service.name)}</span>
           </label>
         `
@@ -2436,6 +2458,28 @@ async function openCalendarModal(options = {}) {
               <div class="availability-times">${timeCheckboxes}</div>
               <div class="actions-row">
                 <button class="primary" id="availabilitySave">Uložit dostupnost</button>
+              </div>
+              <div class="availability-override">
+                <h4>Výjimka pro konkrétní den</h4>
+                <div class="meta">Toto nastavení má prioritu před týdenním plánem (jen pro vybraný den).</div>
+                <div class="field-row">
+                  <div class="field">
+                    <label>Datum výjimky</label>
+                    <input type="date" id="availabilityOverrideDate" />
+                  </div>
+                </div>
+                <div class="availability-services">
+                  ${overrideServiceCheckboxes}
+                </div>
+                <div class="availability-times">
+                  ${overrideTimeCheckboxes}
+                </div>
+                <div class="actions-row">
+                  <button class="primary" id="availabilityOverrideSave">Uložit výjimku dne</button>
+                  <button class="ghost" id="availabilityOverrideDelete">Smazat výjimku</button>
+                </div>
+                <div class="meta" id="availabilityOverrideHint">Vyber datum a uprav služby/časy.</div>
+                <div id="availabilityOverrideList" class="settings-list"></div>
               </div>
             </div>
           `
@@ -3238,38 +3282,208 @@ async function openCalendarModal(options = {}) {
   updateBookingDuration();
 
   if (canEditAvailability) {
-    const data = await api.get('/api/availability');
-    const daySet = new Set(data.days || []);
-    const timeSet = new Set(data.times || []);
-    const selectedServiceIds = new Set((data.service_ids || []).map((id) => String(id)));
-    const servicesConfigured = Boolean(data.services_configured);
-    document.querySelectorAll('.availability-day').forEach((input) => {
-      input.checked = daySet.has(Number(input.value));
-    });
-    document.querySelectorAll('.availability-time').forEach((input) => {
-      input.checked = timeSet.has(input.value);
-    });
-    document.querySelectorAll('.availability-service').forEach((input) => {
-      const serviceId = String(input.value || '');
-      input.checked = servicesConfigured ? selectedServiceIds.has(serviceId) : true;
-    });
+    const availabilityDayInputs = Array.from(document.querySelectorAll('.availability-day'));
+    const availabilityTimeInputs = Array.from(document.querySelectorAll('.availability-time'));
+    const availabilityServiceInputs = Array.from(document.querySelectorAll('.availability-service'));
+    const overrideTimeInputs = Array.from(document.querySelectorAll('.availability-override-time'));
+    const overrideServiceInputs = Array.from(document.querySelectorAll('.availability-override-service'));
+    const overrideDateInput = document.getElementById('availabilityOverrideDate');
+    const overrideHint = document.getElementById('availabilityOverrideHint');
+    const overrideList = document.getElementById('availabilityOverrideList');
+    const overrideSaveButton = document.getElementById('availabilityOverrideSave');
+    const overrideDeleteButton = document.getElementById('availabilityOverrideDelete');
+    const allLeafServiceIds = overrideServiceInputs.map((input) => String(input.value || '')).filter(Boolean);
+
+    let weeklyDaySet = new Set();
+    let weeklyTimeSet = new Set();
+    let weeklyServiceIds = new Set();
+    let weeklyServicesConfigured = true;
+    let overrideMap = new Map();
+
+    const parseIsoDateForDisplay = (isoDate) => {
+      const [yy, mm, dd] = String(isoDate || '').split('-');
+      if (!yy || !mm || !dd) return isoDate;
+      return `${dd}.${mm}.${yy}`;
+    };
+    const weekdayForIsoDate = (isoDate) => {
+      const [yy, mm, dd] = String(isoDate || '').split('-').map(Number);
+      if (!yy || !mm || !dd) return null;
+      const jsDay = new Date(yy, mm - 1, dd).getDay();
+      return (jsDay + 6) % 7;
+    };
+    const readCheckedValues = (inputs) =>
+      inputs.filter((input) => input.checked).map((input) => String(input.value || '')).filter(Boolean);
+    const applyWeeklyCheckboxes = () => {
+      availabilityDayInputs.forEach((input) => {
+        input.checked = weeklyDaySet.has(Number(input.value));
+      });
+      availabilityTimeInputs.forEach((input) => {
+        input.checked = weeklyTimeSet.has(String(input.value));
+      });
+      availabilityServiceInputs.forEach((input) => {
+        const serviceId = String(input.value || '');
+        input.checked = weeklyServicesConfigured ? weeklyServiceIds.has(serviceId) : true;
+      });
+    };
+    const setOverrideCheckboxes = (times, serviceIds, servicesConfigured = true) => {
+      const timeSet = new Set((times || []).map((value) => String(value)));
+      const serviceSet = new Set((serviceIds || []).map((value) => String(value)));
+      overrideTimeInputs.forEach((input) => {
+        input.checked = timeSet.has(String(input.value));
+      });
+      overrideServiceInputs.forEach((input) => {
+        const serviceId = String(input.value || '');
+        input.checked = servicesConfigured ? serviceSet.has(serviceId) : true;
+      });
+    };
+    const defaultOverrideForDate = (isoDate) => {
+      const weekday = weekdayForIsoDate(isoDate);
+      const shouldWorkThatDay = weekday !== null && weeklyDaySet.has(weekday);
+      const defaultTimes = shouldWorkThatDay ? Array.from(weeklyTimeSet) : [];
+      const defaultServiceIds = weeklyServicesConfigured ? Array.from(weeklyServiceIds) : allLeafServiceIds.slice();
+      return {
+        date: isoDate,
+        times: defaultTimes,
+        service_ids: defaultServiceIds,
+        services_configured: true
+      };
+    };
+    const renderOverrideList = () => {
+      if (!overrideList) return;
+      const items = Array.from(overrideMap.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      if (!items.length) {
+        overrideList.innerHTML = '<div class="hint">Zatím nejsou uložené žádné výjimky.</div>';
+        return;
+      }
+      overrideList.innerHTML = items
+        .map((item) => {
+          const serviceCount = item.services_configured ? (item.service_ids || []).length : allLeafServiceIds.length;
+          return `
+            <div class="settings-item availability-override-item">
+              <span>${parseIsoDateForDisplay(item.date)} • ${item.times.length} časů • ${serviceCount} služeb</span>
+              <button type="button" class="ghost availability-override-load" data-date="${item.date}">Načíst</button>
+            </div>
+          `;
+        })
+        .join('');
+      overrideList.querySelectorAll('.availability-override-load').forEach((button) => {
+        button.addEventListener('click', () => {
+          const dateValue = String(button.dataset.date || '');
+          if (!dateValue || !overrideDateInput) return;
+          overrideDateInput.value = dateValue;
+          syncOverrideByDate(dateValue);
+        });
+      });
+    };
+    const syncOverrideByDate = (dateValue) => {
+      if (!overrideDateInput || !overrideHint) return;
+      if (!dateValue) {
+        overrideDeleteButton.disabled = true;
+        overrideHint.textContent = 'Vyber datum a uprav služby/časy.';
+        setOverrideCheckboxes([], []);
+        return;
+      }
+      const existingOverride = overrideMap.get(dateValue);
+      if (existingOverride) {
+        setOverrideCheckboxes(
+          existingOverride.times || [],
+          existingOverride.service_ids || [],
+          Boolean(existingOverride.services_configured)
+        );
+        overrideHint.textContent = 'Načtena uložená výjimka pro vybraný den.';
+        overrideDeleteButton.disabled = false;
+        return;
+      }
+      const fallback = defaultOverrideForDate(dateValue);
+      setOverrideCheckboxes(fallback.times, fallback.service_ids, true);
+      overrideHint.textContent = 'Pro tento den není výjimka. Uložením vytvoříš nový záznam.';
+      overrideDeleteButton.disabled = true;
+    };
+    const fetchAvailabilityProfile = async () => {
+      const data = await api.get('/api/availability');
+      weeklyDaySet = new Set((data.days || []).map((value) => Number(value)));
+      weeklyTimeSet = new Set((data.times || []).map((value) => String(value)));
+      weeklyServiceIds = new Set((data.service_ids || []).map((id) => String(id)));
+      weeklyServicesConfigured = Boolean(data.services_configured);
+      applyWeeklyCheckboxes();
+
+      overrideMap = new Map();
+      (Array.isArray(data.overrides) ? data.overrides : []).forEach((item) => {
+        const dateValue = String(item.date || '').trim();
+        if (!dateValue) return;
+        overrideMap.set(dateValue, {
+          date: dateValue,
+          times: Array.from(new Set((item.times || []).map((value) => String(value)))).sort(),
+          service_ids: Array.from(new Set((item.service_ids || []).map((value) => String(value)))),
+          services_configured: Boolean(item.services_configured)
+        });
+      });
+      renderOverrideList();
+      if (overrideDateInput?.value) {
+        syncOverrideByDate(overrideDateInput.value);
+      } else if (overrideDateInput) {
+        syncOverrideByDate('');
+      }
+    };
+
+    await fetchAvailabilityProfile();
 
     document.getElementById('availabilitySave').addEventListener('click', async () => {
-      const selectedDays = Array.from(document.querySelectorAll('.availability-day:checked')).map((input) =>
-        Number(input.value)
-      );
-      const selectedTimes = Array.from(document.querySelectorAll('.availability-time:checked')).map(
-        (input) => input.value
-      );
-      const selectedServices = Array.from(document.querySelectorAll('.availability-service:checked')).map(
-        (input) => input.value
-      );
+      const selectedDays = readCheckedValues(availabilityDayInputs).map((value) => Number(value));
+      const selectedTimes = readCheckedValues(availabilityTimeInputs);
+      const selectedServices = readCheckedValues(availabilityServiceInputs);
       await api.post('/api/availability', {
         days: selectedDays,
         times: selectedTimes,
         service_ids: selectedServices
       });
+      await fetchAvailabilityProfile();
+      await loadBookingDays();
       alert('Dostupnost uložena.');
+    });
+
+    overrideDateInput.addEventListener('change', async () => {
+      syncOverrideByDate(overrideDateInput.value || '');
+      bookingState.selectedSlot = null;
+      updatePickedLabel();
+      updateBookingSaveState();
+      await loadBookingDays();
+    });
+
+    overrideSaveButton.addEventListener('click', async () => {
+      const dateValue = String(overrideDateInput.value || '').trim();
+      if (!dateValue) {
+        alert('Vyber datum výjimky.');
+        return;
+      }
+      const selectedTimes = readCheckedValues(overrideTimeInputs);
+      const selectedServices = readCheckedValues(overrideServiceInputs);
+      await api.post('/api/availability/override', {
+        date: dateValue,
+        times: selectedTimes,
+        service_ids: selectedServices
+      });
+      await fetchAvailabilityProfile();
+      syncOverrideByDate(dateValue);
+      await loadBookingDays();
+      alert('Výjimka dne byla uložena.');
+    });
+
+    overrideDeleteButton.addEventListener('click', async () => {
+      const dateValue = String(overrideDateInput.value || '').trim();
+      if (!dateValue) {
+        alert('Vyber datum výjimky.');
+        return;
+      }
+      if (!overrideMap.has(dateValue)) {
+        alert('Pro vybraný den není uložená výjimka.');
+        return;
+      }
+      await api.delete(`/api/availability/override?date=${encodeURIComponent(dateValue)}`);
+      await fetchAvailabilityProfile();
+      syncOverrideByDate(dateValue);
+      await loadBookingDays();
+      alert('Výjimka dne byla smazána.');
     });
   }
 
