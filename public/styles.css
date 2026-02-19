@@ -1465,6 +1465,22 @@ button.primary:hover {
   background: rgba(148, 148, 148, 0.08);
 }
 
+.slot-worker-select.is-valid:disabled {
+  border-style: solid;
+  border-color: #1f9a4c;
+  background: rgba(31, 154, 76, 0.18);
+  color: #1f9a4c;
+  opacity: 1;
+}
+
+.slot-worker-select.is-invalid:disabled {
+  border-style: solid;
+  border-color: #d0422b;
+  background: rgba(208, 66, 43, 0.16);
+  color: #d0422b;
+  opacity: 1;
+}
+
 .availability-section {
   margin-top: 10px;
 }
