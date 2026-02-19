@@ -3158,6 +3158,115 @@ app.post('/api/clones/:id/recover-admin', requireSuperAdmin, async (req, res) =>
   });
 });
 
+app.post('/api/clones/superadmin/enforce', requireSuperAdmin, async (req, res) => {
+  const payload = req.body || {};
+  const username = normalizeUsername(payload.username);
+  const password = (payload.password || '').trim();
+  const fullName = (payload.full_name || '').trim() || 'Admin';
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Vyplňte uživatelské jméno a heslo.' });
+  }
+
+  const clones = await db.all(
+    `SELECT c.id, c.tenant_id, c.name, c.slug, c.domain
+     FROM clones c
+     JOIN tenants t ON t.id = c.tenant_id
+     WHERE c.active = 1 AND t.active = 1
+     ORDER BY c.created_at ASC`
+  );
+
+  if (!clones.length) {
+    return res.json({ ok: true, updated: 0, username, clones: [] });
+  }
+
+  const passwordHash = hashPassword(password);
+  const now = nowIso();
+  const result = [];
+
+  for (const clone of clones) {
+    if (!clone.tenant_id) continue;
+
+    const existingTarget = await db.get(
+      'SELECT id FROM users WHERE tenant_id = ? AND username = ?',
+      [clone.tenant_id, username]
+    );
+
+    let targetUserId = existingTarget?.id || `superadmin-${clone.tenant_id}`;
+    if (!existingTarget) {
+      const idConflict = await db.get('SELECT id FROM users WHERE id = ?', [targetUserId]);
+      if (idConflict) targetUserId = newId();
+
+      await db.run(
+        `INSERT INTO users (
+          id, tenant_id, username, full_name, role, income_share_percent, is_superadmin, password_hash, active, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [targetUserId, clone.tenant_id, username, fullName, 'admin', 100, 1, passwordHash, 1, now]
+      );
+    } else {
+      await db.run(
+        `UPDATE users
+         SET full_name = ?, role = ?, income_share_percent = ?, is_superadmin = 1, password_hash = ?, active = 1
+         WHERE id = ? AND tenant_id = ?`,
+        [fullName, 'admin', 100, passwordHash, targetUserId, clone.tenant_id]
+      );
+    }
+
+    const supersToDisable = await db.all(
+      `SELECT id, username
+       FROM users
+       WHERE tenant_id = ? AND active = 1 AND role = ? AND is_superadmin = 1 AND id != ?`,
+      [clone.tenant_id, 'admin', targetUserId]
+    );
+
+    if (supersToDisable.length) {
+      await db.run(
+        `UPDATE users
+         SET active = 0, is_superadmin = 0
+         WHERE tenant_id = ? AND active = 1 AND role = ? AND is_superadmin = 1 AND id != ?`,
+        [clone.tenant_id, 'admin', targetUserId]
+      );
+
+      for (const row of supersToDisable) {
+        await db.run('DELETE FROM sessions WHERE tenant_id = ? AND user_id = ?', [clone.tenant_id, row.id]);
+      }
+    }
+
+    await upsertWorker(targetUserId, fullName, 1, clone.tenant_id);
+
+    await writeAdminAuditLog({
+      actorTenantId: req.tenant.id,
+      actorUserId: req.user.id,
+      action: 'clone_superadmin_enforce',
+      targetTenantId: clone.tenant_id,
+      targetCloneId: clone.id,
+      metadata: {
+        clone_name: clone.name,
+        clone_slug: clone.slug,
+        enforced_username: username,
+        disabled_superadmins: supersToDisable.map((row) => row.username)
+      }
+    });
+
+    result.push({
+      clone_id: clone.id,
+      clone_name: clone.name,
+      clone_slug: clone.slug,
+      tenant_id: clone.tenant_id,
+      domain: clone.domain || null,
+      superadmin_username: username,
+      disabled_superadmins: supersToDisable.map((row) => row.username)
+    });
+  }
+
+  res.json({
+    ok: true,
+    username,
+    updated: result.length,
+    clones: result
+  });
+});
+
 app.post('/api/clones/:id/template-refresh', requireSuperAdmin, async (req, res) => {
   const existing = await db.get('SELECT id, tenant_id FROM clones WHERE id = ? AND active = 1', [req.params.id]);
   if (!existing) {
