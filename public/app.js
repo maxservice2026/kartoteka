@@ -216,6 +216,11 @@ function normalizeDurationMinutes(value, fallback = 0) {
   return numeric;
 }
 
+function toInt(value, fallback = 0) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
 
 function defaultSchemaFieldLabel(type, index = 1) {
