@@ -2462,7 +2462,8 @@ async function openCalendarModal(options = {}) {
       <div class="hint">Oranžové pole značí den s rezervací. Číslo je počet rezervací v daný den.</div>
 
       <div class="settings-section">
-        <h3>Rezervace v měsíci</h3>
+        <h3 id="calendarReservationsTitle">Rezervace v měsíci</h3>
+        <div class="meta" id="calendarReservationsMeta">Klikni na konkrétní datum v kalendáři pro detail dne.</div>
         <div id="calendarReservations" class="settings-list"></div>
       </div>
       ${
@@ -2520,15 +2521,80 @@ async function openCalendarModal(options = {}) {
   }
 
   const listEl = document.getElementById('calendarReservations');
+  const listTitleEl = document.getElementById('calendarReservationsTitle');
+  const listMetaEl = document.getElementById('calendarReservationsMeta');
+  const formatDateCz = (isoDate) => {
+    const [yy, mm, dd] = String(isoDate || '').split('-');
+    if (!yy || !mm || !dd) return '';
+    return `${dd}.${mm}.${yy}`;
+  };
+  const normalizeWorkerName = (value) => {
+    const name = (value || '').toString().trim();
+    return name || 'Bez přiřazeného pracovníka';
+  };
+  const sortByTime = (a, b) => String(a.time_slot || '').localeCompare(String(b.time_slot || ''), 'cs');
+  const renderDayGroupedList = (items) => {
+    const groups = new Map();
+    items.forEach((item) => {
+      const workerName = normalizeWorkerName(item.worker_name);
+      if (!groups.has(workerName)) groups.set(workerName, []);
+      groups.get(workerName).push(item);
+    });
+    const sortedGroups = Array.from(groups.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], 'cs'))
+      .map(([workerName, rows]) => ({
+        workerName,
+        rows: rows.sort(sortByTime)
+      }));
+
+    listEl.innerHTML = sortedGroups
+      .map(
+        (group) => `
+          <section class="calendar-res-group">
+            <header class="calendar-res-group-title">
+              <span>${escapeHtml(group.workerName)}</span>
+              <span>${group.rows.length}x</span>
+            </header>
+            ${group.rows
+              .map(
+                (item) => `
+                  <div class="calendar-res-entry">
+                    <span class="calendar-res-entry-main">${escapeHtml(item.time_slot || '--:--')} • ${escapeHtml(
+                  item.service_name || 'Služba'
+                )} • ${escapeHtml(item.client_name || 'Klientka')}</span>
+                    <span class="calendar-res-entry-side">${escapeHtml(item.phone || item.email || '')}</span>
+                  </div>
+                `
+              )
+              .join('')}
+          </section>
+        `
+      )
+      .join('');
+  };
   const renderReservationList = (dateFilter = '') => {
     const filtered = dateFilter
       ? monthReservations.filter((item) => item.date === dateFilter)
       : monthReservations;
+    if (dateFilter) {
+      listTitleEl.textContent = `Rezervace ${formatDateCz(dateFilter)}`;
+      listMetaEl.textContent = 'Seřazeno podle pracovníků a časů.';
+    } else {
+      listTitleEl.textContent = 'Rezervace v měsíci';
+      listMetaEl.textContent = `Přehled pro ${monthName(month)} ${year}. Klikni na datum pro detail dne.`;
+    }
     if (!filtered.length) {
-      listEl.innerHTML = '<div class="hint">Zatím žádné rezervace.</div>';
+      listEl.innerHTML = dateFilter
+        ? '<div class="hint">V tento den zatím žádné rezervace.</div>'
+        : '<div class="hint">Zatím žádné rezervace.</div>';
+      return;
+    }
+    if (dateFilter) {
+      renderDayGroupedList(filtered);
       return;
     }
     listEl.innerHTML = filtered
+      .sort((a, b) => String(a.date).localeCompare(String(b.date), 'cs') || sortByTime(a, b))
       .map(
         (item) => `
           <div class="settings-item">
