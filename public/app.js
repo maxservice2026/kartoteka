@@ -2418,21 +2418,15 @@ async function openCalendarModal(options = {}) {
             <label>Služba</label>
             <select id="calendarBookingService">${bookingServiceOptions}</select>
           </div>
-          <div class="field">
+          <div class="field hidden" id="calendarBookingDurationWrap">
             <label>Celkový čas</label>
-            <input type="text" id="calendarBookingDuration" value="0 min" readonly />
+            <input type="text" id="calendarBookingDuration" value="" readonly />
           </div>
         </div>
         <div class="field">
           <label>Minislužby (chatbox)</label>
           <div id="calendarBookingVariants" class="addon-block hidden"></div>
           <div class="meta" id="calendarBookingVariantHint">Vyber službu.</div>
-        </div>
-        <div class="field-row">
-          <div class="field">
-            <label>Vybraný termín</label>
-            <input type="text" id="calendarBookingPicked" value="" placeholder="Zatím nevybráno" readonly />
-          </div>
         </div>
         <div id="calendarBookingDateMap" class="date-availability hidden"></div>
         <div id="calendarBookingSlots" class="slot-grid"></div>
@@ -2643,11 +2637,11 @@ async function openCalendarModal(options = {}) {
   const bookingServiceSelect = document.getElementById('calendarBookingService');
   const bookingVariantWrap = document.getElementById('calendarBookingVariants');
   const bookingVariantHint = document.getElementById('calendarBookingVariantHint');
+  const bookingDurationWrap = document.getElementById('calendarBookingDurationWrap');
   const bookingDuration = document.getElementById('calendarBookingDuration');
   const bookingDateMap = document.getElementById('calendarBookingDateMap');
   const bookingSlots = document.getElementById('calendarBookingSlots');
   const bookingSlotsHint = document.getElementById('calendarBookingSlotsHint');
-  const bookingPicked = document.getElementById('calendarBookingPicked');
   const bookingSave = document.getElementById('calendarBookingSave');
   const bookingName = document.getElementById('calendarBookingName');
   const bookingClientList = document.getElementById('calendarBookingClientList');
@@ -2720,12 +2714,6 @@ async function openCalendarModal(options = {}) {
     if (prefillClientEmail) bookingEmail.value = prefillClientEmail;
   }
 
-  const displayDate = (isoDate) => {
-    const [yy, mm, dd] = String(isoDate || '').split('-');
-    if (!yy || !mm || !dd) return '';
-    return `${dd}.${mm}.${yy}`;
-  };
-
   const getSelectedBookingService = () => bookingCatalogById.get(String(bookingState.serviceId)) || null;
 
   const getSelectedBookingOptions = (service = null) => {
@@ -2739,13 +2727,20 @@ async function openCalendarModal(options = {}) {
     const selectedService = getSelectedBookingService();
     if (!selectedService) {
       bookingState.duration = 0;
-      bookingDuration.value = '0 min';
+      bookingDuration.value = '';
+      bookingDurationWrap?.classList.add('hidden');
       return;
     }
     const selectedOptions = getSelectedBookingOptions(selectedService);
     if (!selectedOptions.length) {
       bookingState.duration = normalizeDurationMinutes(selectedService.duration_minutes, 0);
-      bookingDuration.value = `${bookingState.duration} min`;
+      if (bookingState.duration > 0) {
+        bookingDuration.value = `${bookingState.duration} min`;
+        bookingDurationWrap?.classList.remove('hidden');
+      } else {
+        bookingDuration.value = '';
+        bookingDurationWrap?.classList.add('hidden');
+      }
       return;
     }
     const optionsDuration = selectedOptions.reduce(
@@ -2754,7 +2749,13 @@ async function openCalendarModal(options = {}) {
     );
     bookingState.duration =
       optionsDuration > 0 ? optionsDuration : normalizeDurationMinutes(selectedService.duration_minutes, 0);
-    bookingDuration.value = `${bookingState.duration} min`;
+    if (bookingState.duration > 0) {
+      bookingDuration.value = `${bookingState.duration} min`;
+      bookingDurationWrap?.classList.remove('hidden');
+    } else {
+      bookingDuration.value = '';
+      bookingDurationWrap?.classList.add('hidden');
+    }
   };
 
   const syncVariantChoices = () => {
@@ -2825,14 +2826,7 @@ async function openCalendarModal(options = {}) {
   };
 
   const updatePickedLabel = () => {
-    if (!bookingState.selectedDate || !bookingState.selectedSlot) {
-      bookingPicked.value = '';
-      return;
-    }
-    const variantLabel = bookingState.optionLabels.length ? ` • ${bookingState.optionLabels.join(', ')}` : '';
-    const durationLabel = bookingState.duration > 0 ? ` • ${bookingState.duration} min` : '';
-    bookingPicked.value =
-      `${displayDate(bookingState.selectedDate)} ${bookingState.selectedSlot.time_slot} • ${bookingState.selectedSlot.worker_name}${durationLabel}${variantLabel}`;
+    // "Vybraný termín" pole je záměrně skryté kvůli jednoduššímu UI.
   };
 
   const updateBookingSaveState = () => {
