@@ -2474,12 +2474,34 @@ app.get('/api/reservations/calendar', requireFeature('calendar'), async (req, re
   const start = `${year}-${pad2(month)}-01`;
   const end = `${year}-${pad2(month)}-${pad2(lastDay)}`;
 
+  const where = ['date BETWEEN ? AND ?', 'tenant_id = ?'];
+  const params = [start, end, req.tenant.id];
+  if (req.user.role === 'worker') {
+    where.push('worker_id = ?');
+    params.push(req.user.id);
+  }
+
   const rows = await db.all(
-    'SELECT date FROM reservations WHERE date BETWEEN ? AND ? AND tenant_id = ? GROUP BY date',
-    [start, end, req.tenant.id]
+    `SELECT date,
+            COUNT(*) AS reservations_count,
+            COUNT(
+              DISTINCT CASE
+                WHEN TRIM(COALESCE(client_name, '')) <> '' THEN LOWER(TRIM(client_name))
+                ELSE id
+              END
+            ) AS clients_count
+     FROM reservations
+     WHERE ${where.join(' AND ')}
+     GROUP BY date`,
+    params
   );
-  const days = rows.map((row) => row.date);
-  res.json({ days });
+  const counts = rows.map((row) => ({
+    date: row.date,
+    reservations_count: toInt(row.reservations_count, 0),
+    clients_count: toInt(row.clients_count, 0)
+  }));
+  const days = counts.map((row) => row.date);
+  res.json({ days, counts });
 });
 
 app.get('/api/reservations', requireFeature('calendar'), async (req, res) => {

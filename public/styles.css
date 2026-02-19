@@ -1276,20 +1276,28 @@ button.primary:hover {
   font-weight: 600;
 }
 
-.calendar-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #1b4fd8;
+.calendar-day.has-reservation {
+  border-color: rgba(244, 114, 43, 0.65);
+  background: rgba(244, 114, 43, 0.14);
 }
 
-.calendar-day.has-reservation {
-  border-color: rgba(27, 79, 216, 0.35);
+.calendar-day-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: #f4732b;
 }
 
 .calendar-day.selected {
   border-color: var(--accent);
-  background: rgba(244, 114, 43, 0.12);
+  background: rgba(244, 114, 43, 0.2);
 }
 
 .booking-page {

@@ -2208,7 +2208,7 @@ function timeSlots() {
   return slots;
 }
 
-function buildCalendarHtml(year, month, reservations) {
+function buildCalendarHtml(year, month, reservationStats) {
   const firstDay = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const weekdayOffset = (firstDay.getDay() + 6) % 7;
@@ -2222,11 +2222,15 @@ function buildCalendarHtml(year, month, reservations) {
       continue;
     }
     const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNumber).padStart(2, '0')}`;
-    const hasReservation = reservations.has(dateKey);
+    const stat = reservationStats.get(dateKey) || null;
+    const reservationsCount = Math.max(0, toInt(stat?.reservations_count, 0));
+    const clientsCount = Math.max(0, toInt(stat?.clients_count, reservationsCount));
+    const hasReservation = reservationsCount > 0;
+    const title = hasReservation ? ` title="${reservationsCount} rezervací • ${clientsCount} zákaznic"` : '';
     cells.push(`
-      <div class="calendar-day${hasReservation ? ' has-reservation' : ''}">
+      <div class="calendar-day${hasReservation ? ' has-reservation' : ''}"${title}>
         <div class="calendar-day-number">${dayNumber}</div>
-        ${hasReservation ? '<span class="calendar-dot"></span>' : ''}
+        ${hasReservation ? `<span class="calendar-day-count">${reservationsCount}</span>` : ''}
       </div>
     `);
   }
@@ -2253,12 +2257,29 @@ async function openCalendarModal(options = {}) {
   const year = now.getFullYear();
   const month = now.getMonth();
   const monthNumber = month + 1;
-  let reservations = new Set();
+  let reservationStats = new Map();
   try {
     const data = await api.get(`/api/reservations/calendar?year=${year}&month=${monthNumber}`);
-    reservations = new Set(data.days || []);
+    const rows = Array.isArray(data.counts)
+      ? data.counts
+      : (Array.isArray(data.days) ? data.days.map((date) => ({ date, reservations_count: 1, clients_count: 1 })) : []);
+    reservationStats = new Map(
+      rows
+        .map((row) => {
+          const date = String(row.date || '').trim();
+          if (!date) return null;
+          return [
+            date,
+            {
+              reservations_count: Math.max(0, toInt(row.reservations_count, 0)),
+              clients_count: Math.max(0, toInt(row.clients_count, 0))
+            }
+          ];
+        })
+        .filter(Boolean)
+    );
   } catch (err) {
-    reservations = new Set();
+    reservationStats = new Map();
   }
 
   const canEditAvailability = state.auth.user?.role !== 'reception';
@@ -2437,8 +2458,8 @@ async function openCalendarModal(options = {}) {
         </div>
       </div>
 
-      ${buildCalendarHtml(year, month, reservations)}
-      <div class="hint">Modrá tečka značí den s rezervací.</div>
+      ${buildCalendarHtml(year, month, reservationStats)}
+      <div class="hint">Oranžové pole značí den s rezervací. Číslo je počet rezervací v daný den.</div>
 
       <div class="settings-section">
         <h3>Rezervace v měsíci</h3>
