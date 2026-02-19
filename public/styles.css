@@ -600,9 +600,9 @@ button.primary:hover {
 }
 
 .date-availability-day {
-  border: 1px solid var(--border);
-  background: #fff;
-  color: #a0a0a0;
+  border: 1px dashed #d0422b;
+  background: rgba(208, 66, 43, 0.12);
+  color: #b64635;
   border-radius: 8px;
   padding: 6px 0;
   font-size: 12px;
