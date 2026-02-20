@@ -2520,6 +2520,7 @@ app.get('/api/reservations', requireFeature('calendar'), async (req, res) => {
 
   const rows = await db.all(
     `SELECT r.date, r.time_slot, r.client_name, r.phone, r.email, r.note,
+            COALESCE(r.duration_minutes, s.duration_minutes, 0) as duration_minutes,
             s.name as service_name, u.full_name as worker_name
      FROM reservations r
      LEFT JOIN services s ON s.id = r.service_id

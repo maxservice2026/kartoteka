@@ -1441,6 +1441,13 @@ button.primary:hover {
   color: #1f9a4c;
 }
 
+.slot-entry.is-valid .slot-button {
+  border-style: solid;
+  border-color: #1f9a4c;
+  background: rgba(31, 154, 76, 0.18);
+  color: #1f9a4c;
+}
+
 .slot-button.is-invalid {
   border-color: #d0422b;
   background: rgba(208, 66, 43, 0.16);
@@ -1448,6 +1455,13 @@ button.primary:hover {
 }
 
 .slot-worker-select.is-valid {
+  border-color: #1f9a4c;
+  background: rgba(31, 154, 76, 0.18);
+  color: #1f9a4c;
+}
+
+.slot-entry.is-valid .slot-worker-select {
+  border-style: solid;
   border-color: #1f9a4c;
   background: rgba(31, 154, 76, 0.18);
   color: #1f9a4c;

@@ -2213,11 +2213,15 @@ function timeSlots() {
   return slots;
 }
 
-function buildCalendarHtml(year, month, reservationStats) {
+function buildCalendarHtml(year, month, reservationStats, selectedDate = '') {
   const firstDay = new Date(year, month, 1);
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const weekdayOffset = (firstDay.getDay() + 6) % 7;
   const totalCells = Math.ceil((weekdayOffset + daysInMonth) / 7) * 7;
+  const selectedParts = String(selectedDate || '').split('-').map(Number);
+  const selectedYear = selectedParts[0] || 0;
+  const selectedMonth = selectedParts[1] || 0;
+  const selectedDay = selectedParts[2] || 0;
 
   const cells = [];
   for (let i = 0; i < totalCells; i += 1) {
@@ -2231,9 +2235,10 @@ function buildCalendarHtml(year, month, reservationStats) {
     const reservationsCount = Math.max(0, toInt(stat?.reservations_count, 0));
     const clientsCount = Math.max(0, toInt(stat?.clients_count, reservationsCount));
     const hasReservation = reservationsCount > 0;
+    const isSelected = selectedYear === year && selectedMonth === month + 1 && selectedDay === dayNumber;
     const title = hasReservation ? ` title="${reservationsCount} rezervací • ${clientsCount} zákaznic"` : '';
     cells.push(`
-      <div class="calendar-day${hasReservation ? ' has-reservation' : ''}"${title}>
+      <div class="calendar-day${hasReservation ? ' has-reservation' : ''}${isSelected ? ' selected' : ''}" data-day="${dayNumber}"${title}>
         <div class="calendar-day-number">${dayNumber}</div>
         ${hasReservation ? `<span class="calendar-day-count">${reservationsCount}</span>` : ''}
       </div>
@@ -2242,7 +2247,11 @@ function buildCalendarHtml(year, month, reservationStats) {
 
   return `
     <div class="calendar">
-      <div class="calendar-month">${monthName(month)} ${year}</div>
+      <div class="calendar-header">
+        <button type="button" class="ghost calendar-nav" data-nav="-1">‹</button>
+        <div class="calendar-month">${monthName(month)} ${year}</div>
+        <button type="button" class="ghost calendar-nav" data-nav="1">›</button>
+      </div>
       <div class="calendar-weekdays">
         <span>Po</span><span>Út</span><span>St</span><span>Čt</span><span>Pá</span><span>So</span><span>Ne</span>
       </div>
@@ -2259,9 +2268,14 @@ async function openCalendarModal(options = {}) {
   const prefillClientPhone = (options.prefillClientPhone || '').toString().trim();
   const prefillClientEmail = (options.prefillClientEmail || '').toString().trim();
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
+  const requestedYear = toInt(options.year, now.getFullYear());
+  const requestedMonth = toInt(options.month, now.getMonth() + 1);
+  const month = requestedMonth >= 1 && requestedMonth <= 12 ? requestedMonth - 1 : now.getMonth();
+  const year = requestedYear >= 2000 && requestedYear <= 3000 ? requestedYear : now.getFullYear();
   const monthNumber = month + 1;
+  const selectedDateFromOptions = (options.selectedDate || '').toString().trim();
+  const selectedDatePrefix = `${year}-${pad2(monthNumber)}-`;
+  let activeReservationsDate = selectedDateFromOptions.startsWith(selectedDatePrefix) ? selectedDateFromOptions : '';
   let reservationStats = new Map();
   try {
     const data = await api.get(`/api/reservations/calendar?year=${year}&month=${monthNumber}`);
@@ -2426,11 +2440,11 @@ async function openCalendarModal(options = {}) {
         <div class="field">
           <label>Minislužby (chatbox)</label>
           <div id="calendarBookingVariants" class="addon-block hidden"></div>
-          <div class="meta" id="calendarBookingVariantHint">Vyber službu.</div>
+          <div class="meta hidden" id="calendarBookingVariantHint"></div>
         </div>
         <div id="calendarBookingDateMap" class="date-availability hidden"></div>
         <div id="calendarBookingSlots" class="slot-grid"></div>
-        <div id="calendarBookingSlotsHint" class="hint">Vyber službu.</div>
+        <div id="calendarBookingSlotsHint" class="hint hidden"></div>
         <div class="field-row">
           <div class="field">
             <label>Jméno klientky</label>
@@ -2457,7 +2471,7 @@ async function openCalendarModal(options = {}) {
         </div>
       </div>
 
-      ${buildCalendarHtml(year, month, reservationStats)}
+      ${buildCalendarHtml(year, month, reservationStats, activeReservationsDate)}
       <div class="hint">Oranžové pole značí den s rezervací. Číslo je počet rezervací v daný den.</div>
 
       <div class="settings-section">
@@ -2532,6 +2546,28 @@ async function openCalendarModal(options = {}) {
     return name || 'Bez přiřazeného pracovníka';
   };
   const sortByTime = (a, b) => String(a.time_slot || '').localeCompare(String(b.time_slot || ''), 'cs');
+  const formatDateWithWeekday = (isoDate) => {
+    const [yy, mm, dd] = String(isoDate || '').split('-').map(Number);
+    if (!yy || !mm || !dd) return formatDateCz(isoDate);
+    const dayNames = ['Neděle', 'Pondělí', 'Úterý', 'Středa', 'Čtvrtek', 'Pátek', 'Sobota'];
+    const dateObj = new Date(yy, mm - 1, dd);
+    const weekday = dayNames[dateObj.getDay()] || '';
+    return `${weekday} ${dd}.${mm}.${yy}`;
+  };
+  const formatReservationTimeRange = (timeSlot, durationMinutes) => {
+    const slot = String(timeSlot || '').trim();
+    const timeMatch = slot.match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) return '--:--';
+    const startHour = Number(timeMatch[1]);
+    const startMinute = Number(timeMatch[2]);
+    const duration = Math.max(0, toInt(durationMinutes, 0));
+    if (!duration) return `${pad2(startHour)}:${pad2(startMinute)}`;
+    const startTotal = startHour * 60 + startMinute;
+    const endTotal = (startTotal + duration) % (24 * 60);
+    const endHour = Math.floor(endTotal / 60);
+    const endMinute = endTotal % 60;
+    return `${pad2(startHour)}:${pad2(startMinute)} - ${pad2(endHour)}:${pad2(endMinute)}`;
+  };
   const renderDayGroupedList = (items) => {
     const groups = new Map();
     items.forEach((item) => {
@@ -2558,7 +2594,9 @@ async function openCalendarModal(options = {}) {
               .map(
                 (item) => `
                   <div class="calendar-res-entry">
-                    <span class="calendar-res-entry-main">${escapeHtml(item.time_slot || '--:--')} • ${escapeHtml(
+                    <span class="calendar-res-entry-main">${escapeHtml(
+                  formatReservationTimeRange(item.time_slot, item.duration_minutes)
+                )} • ${escapeHtml(
                   item.service_name || 'Služba'
                 )} • ${escapeHtml(item.client_name || 'Klientka')}</span>
                     <span class="calendar-res-entry-side">${escapeHtml(item.phone || item.email || '')}</span>
@@ -2576,7 +2614,7 @@ async function openCalendarModal(options = {}) {
       ? monthReservations.filter((item) => item.date === dateFilter)
       : monthReservations;
     if (dateFilter) {
-      listTitleEl.textContent = `Rezervace ${formatDateCz(dateFilter)}`;
+      listTitleEl.textContent = `Rezervace ${formatDateWithWeekday(dateFilter)}`;
       listMetaEl.textContent = 'Seřazeno podle pracovníků a časů.';
     } else {
       listTitleEl.textContent = 'Rezervace v měsíci';
@@ -2592,22 +2630,46 @@ async function openCalendarModal(options = {}) {
       renderDayGroupedList(filtered);
       return;
     }
-    listEl.innerHTML = filtered
+    const groupedByDate = new Map();
+    filtered
+      .slice()
       .sort((a, b) => String(a.date).localeCompare(String(b.date), 'cs') || sortByTime(a, b))
-      .map(
-        (item) => `
-          <div class="settings-item">
-            <span>${item.date} • ${item.time_slot} • ${item.service_name || 'Služba'} • ${item.client_name}${
-          item.worker_name ? ` • ${item.worker_name}` : ''
-        }</span>
-            <span>${item.phone || item.email || ''}</span>
-          </div>
-        `
-      )
+      .forEach((item) => {
+        const date = item.date || '';
+        if (!groupedByDate.has(date)) groupedByDate.set(date, []);
+        groupedByDate.get(date).push(item);
+      });
+
+    listEl.innerHTML = Array.from(groupedByDate.entries())
+      .map(([date, rows]) => {
+        const orderedRows = rows.slice().sort(sortByTime);
+        return `
+          <section class="calendar-res-group">
+            <header class="calendar-res-group-title">
+              <span>${escapeHtml(formatDateWithWeekday(date))}</span>
+              <span>${orderedRows.length}x</span>
+            </header>
+            ${orderedRows
+              .map(
+                (item) => `
+                  <div class="calendar-res-entry">
+                    <span class="calendar-res-entry-main">${escapeHtml(
+                      formatReservationTimeRange(item.time_slot, item.duration_minutes)
+                    )} • ${escapeHtml(item.service_name || 'Služba')} • ${escapeHtml(item.client_name || 'Klientka')}${
+                      item.worker_name ? ` • ${escapeHtml(item.worker_name)}` : ''
+                    }</span>
+                    <span class="calendar-res-entry-side">${escapeHtml(item.phone || item.email || '')}</span>
+                  </div>
+                `
+              )
+              .join('')}
+          </section>
+        `;
+      })
       .join('');
   };
 
-  renderReservationList();
+  renderReservationList(activeReservationsDate);
 
   document.querySelectorAll('.calendar-day').forEach((cell) => {
     if (cell.classList.contains('empty')) return;
@@ -2616,11 +2678,28 @@ async function openCalendarModal(options = {}) {
       cell.classList.add('selected');
       const day = cell.querySelector('.calendar-day-number')?.textContent;
       if (!day) {
-        renderReservationList();
+        activeReservationsDate = '';
+        renderReservationList('');
         return;
       }
       const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      activeReservationsDate = dateKey;
       renderReservationList(dateKey);
+    });
+  });
+  document.querySelectorAll('.calendar-nav').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const delta = Number(button.dataset.nav || 0);
+      const baseDate = new Date(year, month + delta, 1);
+      closeModal();
+      await openCalendarModal({
+        prefillClientName,
+        prefillClientId,
+        prefillClientPhone,
+        prefillClientEmail,
+        year: baseDate.getFullYear(),
+        month: baseDate.getMonth() + 1
+      });
     });
   });
 
@@ -2654,6 +2733,14 @@ async function openCalendarModal(options = {}) {
     suggestions: [],
     searchTimer: null,
     searchSeq: 0
+  };
+  const setBookingVariantHint = (text = '') => {
+    bookingVariantHint.textContent = text;
+    bookingVariantHint.classList.toggle('hidden', !text);
+  };
+  const setBookingSlotsHint = (text = '') => {
+    bookingSlotsHint.textContent = text;
+    bookingSlotsHint.classList.toggle('hidden', !text);
   };
 
   const normalizedName = (value) => (value || '').toString().trim().replace(/\s+/g, ' ').toLocaleLowerCase('cs');
@@ -2763,7 +2850,7 @@ async function openCalendarModal(options = {}) {
     if (!selectedService) {
       bookingVariantWrap.classList.add('hidden');
       bookingVariantWrap.innerHTML = '';
-      bookingVariantHint.textContent = 'Vyber službu.';
+      setBookingVariantHint('');
       bookingState.optionKeys = [];
       bookingState.optionLabels = [];
       updateBookingDuration();
@@ -2774,7 +2861,7 @@ async function openCalendarModal(options = {}) {
     if (!options.length) {
       bookingVariantWrap.classList.add('hidden');
       bookingVariantWrap.innerHTML = '';
-      bookingVariantHint.textContent = 'Pro tuto službu nejsou nastavené minislužby.';
+      setBookingVariantHint('');
       bookingState.optionKeys = [];
       bookingState.optionLabels = [];
       updateBookingDuration();
@@ -2782,7 +2869,7 @@ async function openCalendarModal(options = {}) {
     }
 
     bookingVariantWrap.classList.remove('hidden');
-    bookingVariantHint.textContent = 'Zaškrtni minislužby stejně jako v kartě klientky.';
+    setBookingVariantHint('Zaškrtni minislužby stejně jako v kartě klientky.');
 
     const selectedKeys = new Set(bookingState.optionKeys || []);
     const listHtml = options
@@ -2845,13 +2932,13 @@ async function openCalendarModal(options = {}) {
     const starts = Array.isArray(startSlots) ? startSlots : [];
     const blocked = Array.isArray(blockedStarts) ? blockedStarts : [];
     if (!base.length) {
-      bookingSlotsHint.textContent = hintText || 'Pro vybraný den nejsou dostupné časy.';
+      setBookingSlotsHint(hintText || 'Pro vybraný den nejsou dostupné časy.');
       bookingSave.disabled = true;
       updatePickedLabel();
       return;
     }
 
-    bookingSlotsHint.textContent = '';
+    setBookingSlotsHint('');
 
     const baseByWorker = new Map();
     base.forEach((slot) => {
@@ -2962,7 +3049,7 @@ async function openCalendarModal(options = {}) {
     );
 
     if (!visibleTimes.length) {
-      bookingSlotsHint.textContent = hintText || 'Pro vybraný den nejsou dostupné časy.';
+      setBookingSlotsHint(hintText || 'Pro vybraný den nejsou dostupné časy.');
       bookingSave.disabled = true;
       updatePickedLabel();
       return;
@@ -3033,7 +3120,7 @@ async function openCalendarModal(options = {}) {
               const valid = highlightSelection(worker.id, timeSlot);
               updatePickedLabel();
               bookingSave.disabled = !valid || !bookingName.value.trim();
-              bookingSlotsHint.textContent = valid ? '' : 'Vybraný čas nevyhovuje délce služby.';
+              setBookingSlotsHint(valid ? '' : 'Vybraný čas nevyhovuje délce služby.');
             });
           }
           entry.appendChild(button);
@@ -3078,7 +3165,7 @@ async function openCalendarModal(options = {}) {
             clearSelectionHighlight();
             updatePickedLabel();
             updateBookingSaveState();
-            bookingSlotsHint.textContent = '';
+            setBookingSlotsHint('');
             return;
           }
           const worker = workers.find((item) => item.id === workerId);
@@ -3090,7 +3177,7 @@ async function openCalendarModal(options = {}) {
           const valid = highlightSelection(workerId, timeSlot);
           updatePickedLabel();
           bookingSave.disabled = !valid || !bookingName.value.trim();
-          bookingSlotsHint.textContent = valid ? '' : 'Vybraný čas nevyhovuje délce služby.';
+          setBookingSlotsHint(valid ? '' : 'Vybraný čas nevyhovuje délce služby.');
         });
 
         entry.appendChild(select);
@@ -3107,7 +3194,7 @@ async function openCalendarModal(options = {}) {
       bookingDateMap.classList.add('hidden');
       bookingDateMap.innerHTML = '';
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Vyber službu.';
+      setBookingSlotsHint('');
       return;
     }
 
@@ -3126,7 +3213,7 @@ async function openCalendarModal(options = {}) {
       const isAvailable = availableDays.has(day);
       const isSelected = selectedInThisMonth && selectedDay === day;
       dayButtons.push(
-        `<button type="button" class="date-availability-day${isAvailable ? ' available' : ''}${isSelected ? ' selected' : ''}" data-day="${day}" ${isAvailable ? '' : 'disabled'}>${day}</button>`
+        `<button type="button" class="date-availability-day${isAvailable ? ' available' : ' unavailable'}${isSelected ? ' selected' : ''}" data-day="${day}" ${isAvailable ? '' : 'disabled'}>${day}</button>`
       );
     }
 
@@ -3170,6 +3257,8 @@ async function openCalendarModal(options = {}) {
         const day = Number(button.dataset.day);
         bookingState.selectedDate = `${bookingState.mapYear}-${String(bookingState.mapMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         bookingState.selectedSlot = null;
+        activeReservationsDate = bookingState.selectedDate;
+        renderReservationList(activeReservationsDate);
         updatePickedLabel();
         updateBookingSaveState();
         await loadBookingSlots();
@@ -3186,7 +3275,7 @@ async function openCalendarModal(options = {}) {
       bookingDateMap.classList.add('hidden');
       bookingDateMap.innerHTML = '';
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Vyber službu/minislužby s časovou dotací.';
+      setBookingSlotsHint('Vyber službu/minislužby s časovou dotací.');
       updateBookingSaveState();
       return;
     }
@@ -3202,7 +3291,7 @@ async function openCalendarModal(options = {}) {
     if (!response.ok) {
       renderBookingDateMap([]);
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Nepodařilo se načíst dostupné dny.';
+      setBookingSlotsHint('Nepodařilo se načíst dostupné dny.');
       return;
     }
     const data = await response.json();
@@ -3226,19 +3315,19 @@ async function openCalendarModal(options = {}) {
   const loadBookingSlots = async () => {
     if (!bookingState.serviceId) {
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Vyber službu.';
+      setBookingSlotsHint('');
       updateBookingSaveState();
       return;
     }
     if (bookingState.duration <= 0) {
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Vyber službu/minislužby s časovou dotací.';
+      setBookingSlotsHint('Vyber službu/minislužby s časovou dotací.');
       updateBookingSaveState();
       return;
     }
     if (!bookingState.selectedDate) {
       bookingSlots.innerHTML = '';
-      bookingSlotsHint.textContent = 'Vyber den.';
+      setBookingSlotsHint('Vyber den.');
       updateBookingSaveState();
       return;
     }
@@ -3576,6 +3665,7 @@ async function openCalendarModal(options = {}) {
   }
 
   syncVariantChoices();
+  setBookingSlotsHint('');
   await loadBookingDays();
 }
 
