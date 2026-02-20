@@ -221,6 +221,12 @@ function toInt(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function pad2(value) {
+  const numeric = Number.parseInt(value, 10);
+  const safe = Number.isFinite(numeric) ? numeric : 0;
+  return String(safe).padStart(2, '0');
+}
+
 const SERVICE_FIELD_TYPES = new Set(['text', 'textarea', 'number', 'checkbox', 'select', 'multiselect', 'heading']);
 
 function defaultSchemaFieldLabel(type, index = 1) {
