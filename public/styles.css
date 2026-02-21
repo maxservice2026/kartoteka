@@ -1070,6 +1070,11 @@ button.primary:hover {
   font-weight: 600;
 }
 
+.history-detail-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .history-detail-grid {
   display: grid;
   gap: 6px;
@@ -1111,6 +1116,52 @@ button.primary:hover {
 .history-detail-empty {
   font-size: 12px;
   color: var(--muted);
+}
+
+.history-edit-form {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fcfcfc;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.history-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.history-edit-grid .field {
+  margin-bottom: 0;
+}
+
+.history-edit-grid .field-wide {
+  grid-column: 1 / -1;
+}
+
+.history-edit-grid textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.history-edit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-edit-actions button {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+@media (max-width: 780px) {
+  .history-edit-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .modal-backdrop {

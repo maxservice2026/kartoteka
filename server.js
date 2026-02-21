@@ -157,6 +157,16 @@ function toDateOnly(input) {
   return toLocalDateString(parsed);
 }
 
+function toDateOnlyStrict(input) {
+  if (input === null || input === undefined) return null;
+  const value = String(input).trim();
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return toLocalDateString(parsed);
+}
+
 function toInt(value, fallback = 0) {
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) ? n : fallback;
@@ -3675,6 +3685,63 @@ app.put('/api/visits/worker', requireAdmin, async (req, res) => {
     worker_id: worker.id,
     worker_name: worker.full_name
   });
+});
+
+app.put('/api/visits/:id', async (req, res) => {
+  const payload = req.body || {};
+  const visit = await db.get('SELECT id FROM visits WHERE id = ? AND tenant_id = ?', [req.params.id, req.tenant.id]);
+  if (!visit) return res.status(404).json({ error: 'Záznam návštěvy nebyl nalezen.' });
+
+  const updates = [];
+  const params = [];
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'date')) {
+    const nextDate = toDateOnlyStrict(payload.date);
+    if (!nextDate) return res.status(400).json({ error: 'Neplatné datum.' });
+    updates.push('date = ?');
+    params.push(nextDate);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'payment_method')) {
+    const paymentMethod = (payload.payment_method || '').toString().trim().toLowerCase();
+    if (!['cash', 'transfer'].includes(paymentMethod)) {
+      return res.status(400).json({ error: 'Neplatná metoda platby.' });
+    }
+    updates.push('payment_method = ?');
+    params.push(paymentMethod);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'note')) {
+    const note = (payload.note || '').toString().trim();
+    updates.push('note = ?');
+    params.push(note || null);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'manual_total')) {
+    const parsedTotal = Number(payload.manual_total);
+    if (!Number.isFinite(parsedTotal) || parsedTotal < 0) {
+      return res.status(400).json({ error: 'Neplatná částka.' });
+    }
+    const total = Math.round(parsedTotal);
+    updates.push('manual_total = ?');
+    params.push(total);
+    updates.push('total = ?');
+    params.push(total);
+  }
+
+  if (!updates.length) {
+    return res.json({ ok: true, unchanged: true });
+  }
+
+  params.push(req.params.id, req.tenant.id);
+  await db.run(
+    `UPDATE visits
+     SET ${updates.join(', ')}
+     WHERE id = ? AND tenant_id = ?`,
+    params
+  );
+
+  res.json({ ok: true });
 });
 
 app.delete('/api/visits/:id', async (req, res) => {

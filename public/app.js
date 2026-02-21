@@ -90,6 +90,7 @@ const state = {
   pendingServiceDrafts: {},
   openVisitGroups: {},
   visitWorkerChanges: {},
+  visitEditDrafts: {},
   auth: {
     token: null,
     user: null,
@@ -844,6 +845,19 @@ function formatTimeOnly(value) {
   });
 }
 
+function toDateInputValue(value) {
+  const raw = (value || '').toString().trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return todayLocal();
+  parsed.setMinutes(parsed.getMinutes() - parsed.getTimezoneOffset());
+  return parsed.toISOString().slice(0, 10);
+}
+
+function paymentMethodLabel(value) {
+  return (value || '').toString().toLowerCase() === 'transfer' ? 'Převodem' : 'Hotově';
+}
+
 function setBuildInfo(healthData) {
   if (!dom.buildInfo) return;
   const version = (healthData?.version || '').toString().trim();
@@ -1225,6 +1239,7 @@ async function loadVisits(clientId) {
   state.visits = clientId ? await api.get(`/api/clients/${clientId}/visits`) : [];
   state.openVisitGroups = {};
   state.visitWorkerChanges = {};
+  state.visitEditDrafts = {};
   renderVisits();
 }
 
@@ -1560,7 +1575,7 @@ function renderVisits() {
         : group.worker_name
           ? ` • ${escapeHtml(group.worker_name)}`
           : '';
-      const payment = group.payment_method === 'transfer' ? 'Převodem' : 'Hotově';
+      const payment = paymentMethodLabel(group.payment_method);
       const savedTime = formatTimeOnly(group.created_at);
       const savedTimeLabel = savedTime ? ` • uloženo ${savedTime}` : '';
       const note = group.note ? `Poznámka: ${group.note}` : '';
@@ -1654,6 +1669,86 @@ function renderVisits() {
       } catch (err) {
         selectEl.disabled = false;
         selectEl.value = currentWorkerId;
+      }
+    });
+  });
+
+  dom.visitsList.querySelectorAll('[data-visit-edit-open]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const visitId = (button.dataset.visitEditOpen || '').toString();
+      if (!visitId) return;
+      const visit = state.visits.find((item) => item.id === visitId);
+      if (!visit) return;
+      const baseManualTotal = visit.manual_total !== null && visit.manual_total !== undefined && visit.manual_total !== ''
+        ? Number(visit.manual_total)
+        : Number(visit.total);
+      state.visitEditDrafts[visitId] = {
+        date: toDateInputValue(visit.date),
+        payment_method: (visit.payment_method || 'cash').toString().toLowerCase() === 'transfer' ? 'transfer' : 'cash',
+        manual_total: Number.isFinite(baseManualTotal) ? Math.max(0, Math.round(baseManualTotal)) : 0,
+        note: (visit.note || '').toString()
+      };
+      renderVisits();
+    });
+  });
+
+  dom.visitsList.querySelectorAll('[data-visit-edit-cancel]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const visitId = (button.dataset.visitEditCancel || '').toString();
+      if (!visitId) return;
+      delete state.visitEditDrafts[visitId];
+      renderVisits();
+    });
+  });
+
+  dom.visitsList.querySelectorAll('[data-visit-edit-field]').forEach((inputEl) => {
+    inputEl.addEventListener('input', () => {
+      const visitId = (inputEl.dataset.visitId || '').toString();
+      const field = (inputEl.dataset.visitEditField || '').toString();
+      if (!visitId || !field || !state.visitEditDrafts[visitId]) return;
+      state.visitEditDrafts[visitId] = {
+        ...state.visitEditDrafts[visitId],
+        [field]: inputEl.value
+      };
+    });
+    inputEl.addEventListener('change', () => inputEl.dispatchEvent(new Event('input')));
+  });
+
+  dom.visitsList.querySelectorAll('[data-visit-edit-save]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const visitId = (button.dataset.visitEditSave || '').toString();
+      if (!visitId) return;
+      const draft = state.visitEditDrafts[visitId];
+      if (!draft) return;
+      const payload = {
+        date: toDateInputValue(draft.date),
+        payment_method: (draft.payment_method || 'cash').toString().toLowerCase() === 'transfer' ? 'transfer' : 'cash',
+        manual_total: Math.max(0, Math.round(Number(draft.manual_total) || 0)),
+        note: (draft.note || '').toString().trim()
+      };
+      button.disabled = true;
+      try {
+        await api.put(`/api/visits/${visitId}`, payload);
+        state.visits = state.visits.map((visit) => {
+          if (visit.id !== visitId) return visit;
+          return {
+            ...visit,
+            date: payload.date,
+            payment_method: payload.payment_method,
+            manual_total: payload.manual_total,
+            total: payload.manual_total,
+            note: payload.note || null
+          };
+        });
+        state.visits.sort((a, b) => {
+          const byDate = (b.date || '').localeCompare(a.date || '');
+          if (byDate !== 0) return byDate;
+          return (Date.parse(b.created_at || '') || 0) - (Date.parse(a.created_at || '') || 0);
+        });
+        delete state.visitEditDrafts[visitId];
+        renderVisits();
+      } catch (err) {
+        button.disabled = false;
       }
     });
   });
@@ -1788,12 +1883,58 @@ function renderVisitGroupDetails(group) {
     const noteHtml = note
       ? `<div class="history-detail-note">${escapeHtml(note)}</div>`
       : '<div class="history-detail-empty">Bez poznámky.</div>';
+    const visitId = (visit.id || '').toString();
+    const editDraft = visitId ? state.visitEditDrafts[visitId] : null;
+    const editDate = toDateInputValue(editDraft?.date || visit.date);
+    const editPayment = (editDraft?.payment_method || visit.payment_method || 'cash').toString().toLowerCase() === 'transfer'
+      ? 'transfer'
+      : 'cash';
+    const editManualTotalRaw = editDraft?.manual_total ?? visit.manual_total ?? visit.total ?? 0;
+    const editManualTotal = Math.max(0, Math.round(Number(editManualTotalRaw) || 0));
+    const editNote = (editDraft?.note ?? visit.note ?? '').toString();
+    const editActionsHtml = editDraft
+      ? `
+        <div class="history-edit-form">
+          <div class="history-edit-grid">
+            <label class="field">
+              <span>Datum</span>
+              <input type="date" value="${escapeHtml(editDate)}" data-visit-id="${escapeHtml(visitId)}" data-visit-edit-field="date" />
+            </label>
+            <label class="field">
+              <span>Platba</span>
+              <select data-visit-id="${escapeHtml(visitId)}" data-visit-edit-field="payment_method">
+                <option value="cash" ${editPayment === 'cash' ? 'selected' : ''}>Hotově</option>
+                <option value="transfer" ${editPayment === 'transfer' ? 'selected' : ''}>Převodem</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Cena celkem (Kč)</span>
+              <input type="number" min="0" step="1" value="${escapeHtml(String(editManualTotal))}" data-visit-id="${escapeHtml(visitId)}" data-visit-edit-field="manual_total" />
+            </label>
+            <label class="field field-wide">
+              <span>Poznámka</span>
+              <textarea rows="2" data-visit-id="${escapeHtml(visitId)}" data-visit-edit-field="note">${escapeHtml(editNote)}</textarea>
+            </label>
+          </div>
+          <div class="history-edit-actions">
+            <button type="button" class="ghost" data-visit-edit-cancel="${escapeHtml(visitId)}">Zrušit</button>
+            <button type="button" data-visit-edit-save="${escapeHtml(visitId)}">Uložit změny</button>
+          </div>
+        </div>
+      `
+      : `
+        <div class="history-edit-actions">
+          <button type="button" class="ghost" data-visit-edit-open="${escapeHtml(visitId)}">Upravit návštěvu</button>
+        </div>
+      `;
     return `
       <div class="history-detail-item">
         <div class="history-detail-head">
           <span>${escapeHtml(title)}</span>
           <span>${formatCzk(visit.total)}</span>
         </div>
+        <div class="history-detail-meta">${escapeHtml(visit.date || '')} • ${paymentMethodLabel(visit.payment_method)}</div>
+        ${editActionsHtml}
         <div class="history-detail-section">
           <div class="history-detail-section-title">Použité kroky</div>
           ${stepsHtml}
