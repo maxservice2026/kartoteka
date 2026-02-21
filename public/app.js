@@ -1020,11 +1020,17 @@ function openProPreviewModal(featureKey) {
 }
 
 async function runProFeature(featureKey, openFeature) {
-  if (isFeatureEnabled(featureKey)) {
-    await openFeature();
-    return;
+  try {
+    if (isFeatureEnabled(featureKey)) {
+      await openFeature();
+      return;
+    }
+    openProPreviewModal(featureKey);
+  } catch (error) {
+    console.error(`Nepodařilo se otevřít sekci: ${featureKey}`, error);
+    const detail = error?.message ? `\n\n${error.message}` : '';
+    alert(`Sekci se nepodařilo otevřít. Zkus stránku obnovit.${detail}`);
   }
-  openProPreviewModal(featureKey);
 }
 
 function hideAuthScreen() {
